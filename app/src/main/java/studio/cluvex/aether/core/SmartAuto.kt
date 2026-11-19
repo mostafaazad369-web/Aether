@@ -40,6 +40,18 @@ import javax.net.ssl.SSLSocketFactory
  */
 enum class DpiClass { OPEN, SNI_FILTERING, UDP_THROTTLED, HOSTILE }
 
+/**
+ * Reachability is deliberately separate from DPI: failed TLS/DNS probes alone
+ * cannot tell censorship from a missing upstream route.
+ */
+enum class NetworkAccessClass {
+    INTERNATIONAL_REACHABLE,
+    DPI_OR_TLS_INTERFERENCE,
+    INTERNATIONAL_RESTRICTED,
+    LOCAL_ONLY,
+    UNKNOWN,
+}
+
 /** Everything Smart Auto learned about the current network before connecting. */
 data class NetworkFingerprint(
     val dpiClass: DpiClass,
@@ -50,6 +62,13 @@ data class NetworkFingerprint(
     val iranCellular: Boolean,
     /** WARP range CIDR -> TCP connect latency in ms (-1 = unreachable). */
     val edgeLatencyMs: Map<String, Long>,
+    /** At least one independent public TCP/443 endpoint accepted a connection. */
+    val externalTcpOk: Boolean = false,
+    /** Android says this network offers internet capability. */
+    val internetCapability: Boolean = false,
+    /** Android's system validation probe succeeded. */
+    val validated: Boolean = false,
+    val accessClass: NetworkAccessClass = NetworkAccessClass.UNKNOWN,
 )
 
 /** One concrete, ready-to-launch strategy in the Smart Auto ladder. */
@@ -111,16 +130,26 @@ object SmartAuto {
                 if (iranCellular) " (Iranian cellular)" else "",
         )
         val started = System.currentTimeMillis()
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        val internetCapability = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         val fp = coroutineScope {
-            // All probes run in PARALLEL — the whole stage costs one timeout at worst.
+            // Probe independent IP destinations in parallel. TCP reachability is
+            // measured separately from DNS and TLS so a dead international route
+            // is not mislabeled as ordinary DPI.
             val udpCf = async { udpDnsProbe("1.1.1.1") }
             val udpGoog = async { udpDnsProbe("8.8.8.8") }
             val tls = async { tlsSniProbe() }
+            val tcpTargets = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+            val tcpJobs = tcpTargets.map { ip -> async { tcpLatencyMs(ip, 443) } }
             val edgeJobs = EDGES.map { (cidr, probeIp) ->
                 async { cidr to tcpLatencyMs(probeIp, 443) }
             }
             val udpOk = udpCf.await() || udpGoog.await()
             val tlsOk = tls.await()
+            val tcpResults = tcpJobs.awaitAll()
+            val externalTcpOk = tcpResults.any { it >= 0 }
             val edges = edgeJobs.awaitAll().toMap()
             val cls = when {
                 udpOk && tlsOk -> DpiClass.OPEN
@@ -128,7 +157,11 @@ object SmartAuto {
                 tlsOk -> DpiClass.UDP_THROTTLED
                 else -> DpiClass.HOSTILE
             }
-            NetworkFingerprint(cls, udpOk, tlsOk, operatorName, iranCellular, edges)
+            val access = classifyAccess(internetCapability, validated, externalTcpOk, tlsOk)
+            NetworkFingerprint(
+                cls, udpOk, tlsOk, operatorName, iranCellular, edges,
+                externalTcpOk, internetCapability, validated, access,
+            )
         }
         val edgeSummary = fp.edgeLatencyMs.entries.joinToString(", ") { (range, ms) ->
             "$range=${if (ms < 0) "unreachable" else "${ms}ms"}"
@@ -136,9 +169,29 @@ object SmartAuto {
         DiagnosticsLog.i(
             TAG,
             "DPI fingerprint ready in ${System.currentTimeMillis() - started} ms: " +
-                "udp=${fp.udpOk} tlsSni=${fp.tlsSniOk} → ${fp.dpiClass} | edges: $edgeSummary",
+                "udp=${fp.udpOk} tlsSni=${fp.tlsSniOk} tcp443=${fp.externalTcpOk} " +
+                "androidValidated=${fp.validated} access=${fp.accessClass} → ${fp.dpiClass} | edges: $edgeSummary",
         )
         fp
+    }
+
+    /**
+     * Pure classifier, intentionally conservative. Android's INTERNET /
+     * VALIDATED flags plus independent TCP and TLS probes separate likely
+     * upstream loss from TLS/SNI interference without treating one failed DNS
+     * resolver as proof of a national shutdown.
+     */
+    fun classifyAccess(
+        internetCapability: Boolean,
+        validated: Boolean,
+        externalTcpOk: Boolean,
+        tlsSniOk: Boolean,
+    ): NetworkAccessClass = when {
+        !internetCapability -> NetworkAccessClass.LOCAL_ONLY
+        externalTcpOk && !tlsSniOk -> NetworkAccessClass.DPI_OR_TLS_INTERFERENCE
+        externalTcpOk && tlsSniOk -> NetworkAccessClass.INTERNATIONAL_REACHABLE
+        !externalTcpOk && !validated -> NetworkAccessClass.INTERNATIONAL_RESTRICTED
+        else -> NetworkAccessClass.UNKNOWN
     }
 
     // ---- Stage 3: turn the fingerprint into an ordered strategy ladder ----
