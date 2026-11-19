@@ -51,6 +51,7 @@ enum class NetworkAccessClass {
     LOCAL_NETWORK_ONLY,
     LOCAL_ONLY,
     CAPTIVE_PORTAL,
+    OFFLINE,
     UNKNOWN,
 }
 
@@ -171,7 +172,7 @@ object SmartAuto {
             }
             val access = classifyAccess(
                 internetCapability, validated, externalTcpOk, tlsOk,
-                localResolverOk, captivePortal,
+                localResolverOk, captivePortal, networkAvailable = caps != null,
             )
             NetworkFingerprint(
                 cls, udpOk, tlsOk, operatorName, iranCellular, edges,
@@ -204,7 +205,9 @@ object SmartAuto {
         tlsSniOk: Boolean,
         localResolverOk: Boolean = false,
         captivePortal: Boolean = false,
+        networkAvailable: Boolean = true,
     ): NetworkAccessClass = when {
+        !networkAvailable -> NetworkAccessClass.OFFLINE
         captivePortal -> NetworkAccessClass.CAPTIVE_PORTAL
         externalTcpOk && !tlsSniOk -> NetworkAccessClass.DPI_OR_TLS_INTERFERENCE
         externalTcpOk && tlsSniOk -> NetworkAccessClass.INTERNATIONAL_REACHABLE
