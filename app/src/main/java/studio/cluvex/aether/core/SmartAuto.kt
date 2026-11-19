@@ -49,6 +49,7 @@ enum class NetworkAccessClass {
     DPI_OR_TLS_INTERFERENCE,
     INTERNATIONAL_RESTRICTED,
     LOCAL_ONLY,
+    CAPTIVE_PORTAL,
     UNKNOWN,
 }
 
@@ -69,6 +70,7 @@ data class NetworkFingerprint(
     /** Android's system validation probe succeeded. */
     val validated: Boolean = false,
     val accessClass: NetworkAccessClass = NetworkAccessClass.UNKNOWN,
+    val captivePortal: Boolean = false,
 )
 
 /** One concrete, ready-to-launch strategy in the Smart Auto ladder. */
@@ -134,6 +136,7 @@ object SmartAuto {
         val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
         val internetCapability = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val captivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
         val fp = coroutineScope {
             // Probe independent IP destinations in parallel. TCP reachability is
             // measured separately from DNS and TLS so a dead international route
@@ -160,7 +163,7 @@ object SmartAuto {
             val access = classifyAccess(internetCapability, validated, externalTcpOk, tlsOk)
             NetworkFingerprint(
                 cls, udpOk, tlsOk, operatorName, iranCellular, edges,
-                externalTcpOk, internetCapability, validated, access,
+                externalTcpOk, internetCapability, validated, access, captivePortal,
             )
         }
         val edgeSummary = fp.edgeLatencyMs.entries.joinToString(", ") { (range, ms) ->
@@ -170,7 +173,7 @@ object SmartAuto {
             TAG,
             "DPI fingerprint ready in ${System.currentTimeMillis() - started} ms: " +
                 "udp=${fp.udpOk} tlsSni=${fp.tlsSniOk} tcp443=${fp.externalTcpOk} " +
-                "androidValidated=${fp.validated} access=${fp.accessClass} → ${fp.dpiClass} | edges: $edgeSummary",
+                "androidValidated=${fp.validated} captivePortal=${fp.captivePortal} access=${fp.accessClass} → ${fp.dpiClass} | edges: $edgeSummary",
         )
         fp
     }
@@ -186,7 +189,9 @@ object SmartAuto {
         validated: Boolean,
         externalTcpOk: Boolean,
         tlsSniOk: Boolean,
+        captivePortal: Boolean = false,
     ): NetworkAccessClass = when {
+        captivePortal -> NetworkAccessClass.CAPTIVE_PORTAL
         !internetCapability -> NetworkAccessClass.LOCAL_ONLY
         externalTcpOk && !tlsSniOk -> NetworkAccessClass.DPI_OR_TLS_INTERFERENCE
         externalTcpOk && tlsSniOk -> NetworkAccessClass.INTERNATIONAL_REACHABLE
