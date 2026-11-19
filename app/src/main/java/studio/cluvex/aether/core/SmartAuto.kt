@@ -160,7 +160,7 @@ object SmartAuto {
                 tlsOk -> DpiClass.UDP_THROTTLED
                 else -> DpiClass.HOSTILE
             }
-            val access = classifyAccess(internetCapability, validated, externalTcpOk, tlsOk)
+            val access = classifyAccess(internetCapability, validated, externalTcpOk, tlsOk, captivePortal)
             NetworkFingerprint(
                 cls, udpOk, tlsOk, operatorName, iranCellular, edges,
                 externalTcpOk, internetCapability, validated, access, captivePortal,
