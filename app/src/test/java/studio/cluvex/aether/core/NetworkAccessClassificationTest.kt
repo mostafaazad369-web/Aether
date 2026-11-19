@@ -49,4 +49,18 @@ class NetworkAccessClassificationTest {
             SmartAuto.classifyAccess(true, true, false, false),
         )
     }
+    @Test
+    fun captivePortalIsNotMisreportedAsAnInternationalShutdown() {
+        assertEquals(
+            NetworkAccessClass.CAPTIVE_PORTAL,
+            SmartAuto.classifyAccess(
+                internetCapability = true,
+                validated = false,
+                externalTcpOk = false,
+                tlsSniOk = false,
+                captivePortal = true,
+            ),
+        )
+    }
+
 }
