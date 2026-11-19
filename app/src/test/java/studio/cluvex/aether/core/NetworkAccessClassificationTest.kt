@@ -63,4 +63,46 @@ class NetworkAccessClassificationTest {
         )
     }
 
+    @Test
+    fun localResolverWithoutPublicTcpIsClassifiedAsLocalNetworkOnly() {
+        assertEquals(
+            NetworkAccessClass.LOCAL_NETWORK_ONLY,
+            SmartAuto.classifyAccess(
+                internetCapability = true,
+                validated = false,
+                externalTcpOk = false,
+                tlsSniOk = false,
+                localResolverOk = true,
+            ),
+        )
+    }
+
+    @Test
+    fun missingActiveNetworkIsOfflineNotLocalOnly() {
+        assertEquals(
+            NetworkAccessClass.OFFLINE,
+            SmartAuto.classifyAccess(
+                internetCapability = false,
+                validated = false,
+                externalTcpOk = false,
+                tlsSniOk = false,
+                networkAvailable = false,
+            ),
+        )
+    }
+
+    @Test
+    fun localResolverWithValidatedButNoExternalTcpRemainsUnknown() {
+        assertEquals(
+            NetworkAccessClass.UNKNOWN,
+            SmartAuto.classifyAccess(
+                internetCapability = true,
+                validated = true,
+                externalTcpOk = false,
+                tlsSniOk = false,
+                localResolverOk = true,
+            ),
+        )
+    }
+
 }
