@@ -48,6 +48,7 @@ enum class NetworkAccessClass {
     INTERNATIONAL_REACHABLE,
     DPI_OR_TLS_INTERFERENCE,
     INTERNATIONAL_RESTRICTED,
+    LOCAL_NETWORK_ONLY,
     LOCAL_ONLY,
     CAPTIVE_PORTAL,
     UNKNOWN,
@@ -71,6 +72,8 @@ data class NetworkFingerprint(
     val validated: Boolean = false,
     val accessClass: NetworkAccessClass = NetworkAccessClass.UNKNOWN,
     val captivePortal: Boolean = false,
+    /** A private/link-local DNS resolver answered on the active LAN. */
+    val localResolverOk: Boolean = false,
 )
 
 /** One concrete, ready-to-launch strategy in the Smart Auto ladder. */
@@ -137,6 +140,10 @@ object SmartAuto {
         val internetCapability = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         val captivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
+        val linkProperties = cm?.activeNetwork?.let { cm.getLinkProperties(it) }
+        val localDnsServers = linkProperties?.dnsServers.orEmpty()
+            .filter { isLocalResolverAddress(it) }
+            .take(2)
         val fp = coroutineScope {
             // Probe independent IP destinations in parallel. TCP reachability is
             // measured separately from DNS and TLS so a dead international route
@@ -144,6 +151,7 @@ object SmartAuto {
             val udpCf = async { udpDnsProbe("1.1.1.1") }
             val udpGoog = async { udpDnsProbe("8.8.8.8") }
             val tls = async { tlsSniProbe() }
+            val localDns = async { localDnsProbe(localDnsServers) }
             val tcpTargets = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
             val tcpJobs = tcpTargets.map { ip -> async { tcpLatencyMs(ip, 443) } }
             val edgeJobs = EDGES.map { (cidr, probeIp) ->
@@ -151,6 +159,7 @@ object SmartAuto {
             }
             val udpOk = udpCf.await() || udpGoog.await()
             val tlsOk = tls.await()
+            val localResolverOk = localDns.await()
             val tcpResults = tcpJobs.awaitAll()
             val externalTcpOk = tcpResults.any { it >= 0 }
             val edges = edgeJobs.awaitAll().toMap()
@@ -160,10 +169,13 @@ object SmartAuto {
                 tlsOk -> DpiClass.UDP_THROTTLED
                 else -> DpiClass.HOSTILE
             }
-            val access = classifyAccess(internetCapability, validated, externalTcpOk, tlsOk, captivePortal)
+            val access = classifyAccess(
+                internetCapability, validated, externalTcpOk, tlsOk,
+                localResolverOk, captivePortal,
+            )
             NetworkFingerprint(
                 cls, udpOk, tlsOk, operatorName, iranCellular, edges,
-                externalTcpOk, internetCapability, validated, access, captivePortal,
+                externalTcpOk, internetCapability, validated, access, captivePortal, localResolverOk,
             )
         }
         val edgeSummary = fp.edgeLatencyMs.entries.joinToString(", ") { (range, ms) ->
@@ -173,7 +185,8 @@ object SmartAuto {
             TAG,
             "DPI fingerprint ready in ${System.currentTimeMillis() - started} ms: " +
                 "udp=${fp.udpOk} tlsSni=${fp.tlsSniOk} tcp443=${fp.externalTcpOk} " +
-                "androidValidated=${fp.validated} captivePortal=${fp.captivePortal} access=${fp.accessClass} → ${fp.dpiClass} | edges: $edgeSummary",
+                "androidValidated=${fp.validated} captivePortal=${fp.captivePortal} " +
+                "localResolver=${fp.localResolverOk} access=${fp.accessClass} → ${fp.dpiClass} | edges: $edgeSummary",
         )
         fp
     }
@@ -189,12 +202,15 @@ object SmartAuto {
         validated: Boolean,
         externalTcpOk: Boolean,
         tlsSniOk: Boolean,
+        localResolverOk: Boolean = false,
         captivePortal: Boolean = false,
     ): NetworkAccessClass = when {
         captivePortal -> NetworkAccessClass.CAPTIVE_PORTAL
-        !internetCapability -> NetworkAccessClass.LOCAL_ONLY
         externalTcpOk && !tlsSniOk -> NetworkAccessClass.DPI_OR_TLS_INTERFERENCE
         externalTcpOk && tlsSniOk -> NetworkAccessClass.INTERNATIONAL_REACHABLE
+        localResolverOk && !externalTcpOk && (!validated || !internetCapability) ->
+            NetworkAccessClass.LOCAL_NETWORK_ONLY
+        !internetCapability -> NetworkAccessClass.LOCAL_ONLY
         !externalTcpOk && !validated -> NetworkAccessClass.INTERNATIONAL_RESTRICTED
         else -> NetworkAccessClass.UNKNOWN
     }
@@ -321,6 +337,26 @@ object SmartAuto {
     }.getOrElse {
         DiagnosticsLog.d(TAG, "udp53 probe $server → no answer (${it.message})")
         false
+    }
+
+    /**
+     * Probe only private, link-local or ULA resolvers advertised by the active
+     * network. A response proves that the LAN's resolver is reachable; it does
+     * NOT prove that the resolver has an upstream route to the public internet.
+     */
+    private fun localDnsProbe(servers: List<InetAddress>): Boolean =
+        servers.any { server ->
+            val host = server.hostAddress ?: return@any false
+            udpDnsProbe(host, timeoutMs = 1_500)
+        }
+
+    private fun isLocalResolverAddress(address: InetAddress): Boolean {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress ||
+            address.isLinkLocalAddress || address.isSiteLocalAddress
+        ) return true
+        val bytes = address.address
+        // IPv6 Unique Local Addresses: fc00::/7.
+        return bytes.size == 16 && ((bytes[0].toInt() and 0xfe) == 0xfc)
     }
 
     /** TCP connect latency to [ip]:[port] in ms, or -1 when unreachable. */
