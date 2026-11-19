@@ -221,6 +221,27 @@ object SmartAuto {
     // ---- Stage 3: turn the fingerprint into an ordered strategy ladder ----
 
     fun buildPlan(user: ConnectionProfile, fp: NetworkFingerprint): List<AutoCandidate> {
+        when (fp.accessClass) {
+            NetworkAccessClass.LOCAL_NETWORK_ONLY -> DiagnosticsLog.w(
+                TAG,
+                "A local DNS resolver answered, but no public TCP endpoint did. " +
+                    "This confirms LAN reachability only; no domestic upstream relay is configured by this profile.",
+            )
+            NetworkAccessClass.INTERNATIONAL_RESTRICTED -> DiagnosticsLog.w(
+                TAG,
+                "Android reports an internet-capable link, but public TCP probes and system validation failed. " +
+                    "Trying the TCP-shaped / hardened fallback strategies.",
+            )
+            NetworkAccessClass.OFFLINE -> DiagnosticsLog.w(
+                TAG,
+                "No active network is available during fingerprinting; connection attempts may not succeed.",
+            )
+            NetworkAccessClass.CAPTIVE_PORTAL -> DiagnosticsLog.w(
+                TAG,
+                "The active network reports a captive portal. Sign in to the Wi-Fi network before expecting internet access.",
+            )
+            else -> Unit
+        }
         // Prefer the ranges that actually answered, fastest first. Narrowing
         // the scan to live ranges is what makes each attempt FAST; the last
         // resort below still covers the full built-in ranges.
