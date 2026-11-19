@@ -1307,7 +1307,7 @@ class AetherVpnService : VpnService() {
         )
         DiagnosticsLog.i(
             TAG,
-            "Smart Plus on network $networkKey (${fingerprint.dpiClass}, " +
+            "Smart Plus on network $networkKey (${fingerprint.dpiClass}, access=${fingerprint.accessClass}, " +
                 "${if (onMobileData) "mobile data" else "local link"}): " +
                 plan.joinToString(" then ") { step ->
                     when (step) {
