@@ -448,6 +448,9 @@ class AetherVpnService : VpnService() {
     }
 
     private fun startTunnel(rawProfile: ConnectionProfile) {
+        // A new connect supersedes pending stop/lockdown UI finalization. The
+        // teardown still finishes before this session touches shared resources.
+        stopGeneration.incrementAndGet()
         val profile = hydrateSecrets(rawProfile)
         lastProfile = profile
         // 1.2.2 PROTOCOL-SWITCH FIX: this used to bail out silently whenever a
