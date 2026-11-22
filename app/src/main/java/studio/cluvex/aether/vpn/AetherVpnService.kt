@@ -2970,17 +2970,25 @@ class AetherVpnService : VpnService() {
         stopJob = scope.launch(Dispatchers.IO) {
             cleanupForwardingOnly()
             stopCustom()
-            try {
+            val lockdownFailure = try {
                 ensureLockdownTun(profile)
+                null
+            } catch (e: Exception) {
+                e
+            }
+            if (lockdownFailure == null) {
                 lockdownTunActive = true
                 Diagnostics.resetChecks()
                 EngineMeta.reset()
                 AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
                 updateNotification(getString(R.string.state_killswitch))
-            } catch (e: Exception) {
+            } else {
                 lockdownTunActive = false
                 val message = getString(R.string.state_killswitch_failed)
-                DiagnosticsLog.e(TAG, "Kill switch TUN could not be established: ${e.javaClass.simpleName}: ${e.message}")
+                DiagnosticsLog.e(
+                    TAG,
+                    "Kill switch TUN could not be established: ${lockdownFailure.javaClass.simpleName}: ${lockdownFailure.message}",
+                )
                 AetherController.setState(ConnectionState.Error(message))
                 updateNotification(message)
             }
