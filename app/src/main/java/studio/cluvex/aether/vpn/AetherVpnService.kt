@@ -106,6 +106,9 @@ class AetherVpnService : VpnService() {
      */
     private val sessionEpoch = java.util.concurrent.atomic.AtomicLong(0L)
 
+    /** Orders asynchronous stop/lockdown work so older teardown cannot overtake newer intent. */
+    private val stopGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
     override fun onCreate() {
         super.onCreate()
         scope.launch {
@@ -2780,6 +2783,8 @@ class AetherVpnService : VpnService() {
         updateNotification(getString(R.string.state_disconnecting))
         val job = runJob
         runJob = null
+        val generation = stopGeneration.incrementAndGet()
+        val previousStop = stopJob
         // DISCONNECT MUST BE INSTANT. Order matters:
         //   1. cancel the session coroutine (does not wait for it),
         //   2. kill the natives right away — this is what actually makes the
@@ -2792,6 +2797,8 @@ class AetherVpnService : VpnService() {
         // left to run — up to a full minute.
         job?.cancel()
         stopJob = scope.launch(Dispatchers.IO) {
+            previousStop?.join()
+            if (generation != stopGeneration.get()) return@launch
             cleanupNativeOnly(reason)
             stopCustom()
             // STALE-CIRCLES FIX (part 2): clear the finished session's results
@@ -2804,8 +2811,9 @@ class AetherVpnService : VpnService() {
             // Back to the documented ports for the next session: a relocation is a
             // fact about one session's environment, not a setting.
             PortLease.reset()
-            AetherController.setState(ConnectionState.Idle)
-            AetherTileService.requestUpdate(this@AetherVpnService)
+            if (generation == stopGeneration.get()) {
+                AetherController.setState(ConnectionState.Idle)
+                AetherTileService.requestUpdate(this@AetherVpnService)
             // ISSUE #20 / #23 ROOT CAUSE (1.3.1): the widget was repainted ONLY
             // from updateNotification(), and this path does not call it - the
             // notification is about to be dropped, not updated. So the last thing
@@ -2813,9 +2821,10 @@ class AetherVpnService : VpnService() {
             // top of this method, and it stayed there forever: "when disconnect
             // with widget it shows disconnecting .... always". The tile was
             // already refreshed on the line above; the widget was simply missed.
-            AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
-            stopForegroundCompat()
-            stopSelf()
+                AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
+                stopForegroundCompat()
+                stopSelf()
+            }
             job?.join()
         }
     }
@@ -2967,7 +2976,11 @@ class AetherVpnService : VpnService() {
         val job = runJob
         runJob = null
         job?.cancel()
+        val generation = stopGeneration.incrementAndGet()
+        val previousStop = stopJob
         stopJob = scope.launch(Dispatchers.IO) {
+            previousStop?.join()
+            if (generation != stopGeneration.get()) return@launch
             cleanupForwardingOnly()
             stopCustom()
             val lockdownFailure = try {
@@ -2992,8 +3005,10 @@ class AetherVpnService : VpnService() {
                 AetherController.setState(ConnectionState.Error(message))
                 updateNotification(message)
             }
-            AetherTileService.requestUpdate(this@AetherVpnService)
-            AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
+            if (generation == stopGeneration.get()) {
+                AetherTileService.requestUpdate(this@AetherVpnService)
+                AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
+            }
             job?.join()
         }
     }
