@@ -302,6 +302,7 @@
     <string name="ping_quality_poor">ضعیف</string>
     <string name="ping_quality_measuring">در حال اندازه‌گیری</string>
     <string name="ping_quality_offline">متصل نیست</string>
+    <string name="ping_quality_failed">اندازه‌گیری ناموفق بود</string>
 
     <!-- ۱.۲.۷: صفحهٔ تنظیمات، انتخاب زبان در خود برنامه و بودجهٔ اندپوینت کش‌شده -->
     <string name="quick_settings_title">تنظیمات تونل</string>
