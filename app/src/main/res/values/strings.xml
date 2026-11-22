@@ -264,6 +264,7 @@
     <string name="strict_kill_switch_title">Strict Kill Switch</string>
     <string name="strict_kill_switch_desc">Keep blocking even after a manual disconnect, until you lift it</string>
     <string name="state_killswitch">Kill switch active - traffic blocked</string>
+    <string name="state_killswitch_failed">Kill switch could not be activated - traffic may not be protected</string>
     <string name="ipv6_leak_title">IPv6 Leak Protection</string>
     <string name="ipv6_leak_desc">Route IPv6 traffic through the tunnel as well</string>
     <string name="smart_reconnect_title">Smart Reconnect</string>
