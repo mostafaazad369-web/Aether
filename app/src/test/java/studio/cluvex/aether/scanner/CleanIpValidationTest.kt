@@ -34,6 +34,25 @@ class CleanIpValidationTest {
         assertNull(CleanIpValidation.select(listOf(a, b), 100, measure = { listOf(101, -1) }))
         assertNull(CleanIpValidation.select(emptyList(), null, measure = { error("no measurements") }))
     }
+    @Test fun validationDeduplicatesAndCapsCandidatesBeforeProbing() = runBlocking {
+        val candidates = (1..15).map { CleanIpValidation.Candidate("104.16.0.$it", 443) }
+        val batches = mutableListOf<List<CleanIpValidation.Candidate>>()
+        val progress = mutableListOf<Pair<Int, Int>>()
+        val winner = CleanIpValidation.select(
+            candidates + candidates.first(),
+            null,
+            measure = { batch ->
+                batches += batch
+                batch.map { if (it.ip.endsWith(".10")) 1L else 20L }
+            },
+            progress = { done, total -> progress += done to total },
+        )
+        assertEquals("104.16.0.1", winner!!.ip)
+        assertEquals(CleanIpValidation.MAX_CANDIDATES, batches.sumOf { it.size })
+        assertEquals(listOf(5, 5), batches.map { it.size })
+        assertEquals((1..10).map { it to 10 }, progress)
+    }
+
     @Test fun cancellationPropagatesRatherThanApplyingAnything() = runBlocking {
         val task = launch { CleanIpValidation.select(listOf(a), null, measure = { awaitCancellation() }) }
         yield(); task.cancelAndJoin(); assertTrue(task.isCancelled)
