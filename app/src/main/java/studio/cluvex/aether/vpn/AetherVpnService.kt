@@ -460,18 +460,17 @@ class AetherVpnService : VpnService() {
         val previousRun = runJob
         val previousStop = stopJob
         runJob = scope.launch {
+            // Finish any already-scheduled teardown before touching shared native
+            // handles. Otherwise this connect's eager cleanup can race the stop job.
+            previousStop?.join()
             if (previousRun != null) {
-                // Same ordering rule as the disconnect path: cancel, kill the
-                // natives (which unblocks the old session immediately), and
-                // only then wait for it to finish. Joining first would stall
-                // the new connect for as long as the old session's engine wait
-                // still had to run.
+                // Cancel, kill the natives (which unblocks the old session
+                // immediately), and only then wait for it to finish.
                 previousRun.cancel()
                 cleanupNativeOnly("superseded-by-new-connect")
                 stopCustom()
                 previousRun.join()
             }
-            previousStop?.join()
             try {
                 connectFlow(profile)
             } catch (e: CancellationException) {
@@ -2814,13 +2813,13 @@ class AetherVpnService : VpnService() {
             if (generation == stopGeneration.get()) {
                 AetherController.setState(ConnectionState.Idle)
                 AetherTileService.requestUpdate(this@AetherVpnService)
-            // ISSUE #20 / #23 ROOT CAUSE (1.3.1): the widget was repainted ONLY
-            // from updateNotification(), and this path does not call it - the
-            // notification is about to be dropped, not updated. So the last thing
-            // ever written to the widget was the "Disconnecting…" painted at the
-            // top of this method, and it stayed there forever: "when disconnect
-            // with widget it shows disconnecting .... always". The tile was
-            // already refreshed on the line above; the widget was simply missed.
+                // ISSUE #20 / #23 ROOT CAUSE (1.3.1): the widget was repainted ONLY
+                // from updateNotification(), and this path does not call it - the
+                // notification is about to be dropped, not updated. So the last thing
+                // ever written to the widget was the "Disconnecting…" painted at the
+                // top of this method, and it stayed there forever: "when disconnect
+                // with widget it shows disconnecting .... always". The tile was
+                // already refreshed on the line above; the widget was simply missed.
                 AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
                 stopForegroundCompat()
                 stopSelf()
@@ -2989,23 +2988,23 @@ class AetherVpnService : VpnService() {
             } catch (e: Exception) {
                 e
             }
-            if (lockdownFailure == null) {
-                lockdownTunActive = true
-                Diagnostics.resetChecks()
-                EngineMeta.reset()
-                AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
-                updateNotification(getString(R.string.state_killswitch))
-            } else {
-                lockdownTunActive = false
-                val message = getString(R.string.state_killswitch_failed)
-                DiagnosticsLog.e(
-                    TAG,
-                    "Kill switch TUN could not be established: ${lockdownFailure.javaClass.simpleName}: ${lockdownFailure.message}",
-                )
-                AetherController.setState(ConnectionState.Error(message))
-                updateNotification(message)
-            }
             if (generation == stopGeneration.get()) {
+                if (lockdownFailure == null) {
+                    lockdownTunActive = true
+                    Diagnostics.resetChecks()
+                    EngineMeta.reset()
+                    AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
+                    updateNotification(getString(R.string.state_killswitch))
+                } else {
+                    lockdownTunActive = false
+                    val message = getString(R.string.state_killswitch_failed)
+                    DiagnosticsLog.e(
+                        TAG,
+                        "Kill switch TUN could not be established: ${lockdownFailure.javaClass.simpleName}: ${lockdownFailure.message}",
+                    )
+                    AetherController.setState(ConnectionState.Error(message))
+                    updateNotification(message)
+                }
                 AetherTileService.requestUpdate(this@AetherVpnService)
                 AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
             }
