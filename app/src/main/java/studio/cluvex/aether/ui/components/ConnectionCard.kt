@@ -93,8 +93,11 @@ import studio.cluvex.aether.model.TransportBackend
 import studio.cluvex.aether.core.NetProbe
 import studio.cluvex.aether.core.PingMonitor
 import studio.cluvex.aether.core.ShareBridge
+import studio.cluvex.aether.ui.theme.AetherAmber
+import studio.cluvex.aether.ui.theme.AetherError
 import studio.cluvex.aether.ui.theme.AetherGlowCyan
 import studio.cluvex.aether.ui.theme.AetherMint
+import studio.cluvex.aether.ui.theme.AetherViolet
 import studio.cluvex.aether.ui.theme.CardSubSurface
 import studio.cluvex.aether.ui.theme.CardSurfaceBottom
 import studio.cluvex.aether.ui.theme.CardSurfaceTop
@@ -142,7 +145,7 @@ import studio.cluvex.aether.ui.theme.CardTextPrimary
  * surface from the user's wallpaper - a purple or brown wallpaper turned this
  * card into something that no longer looked like Aether. The card is pinned to
  * the brand palette instead: deep navy background (#0A0E1A), mint accent
- * (#3EDBB0), one slate glass surface for everything inside it.
+ * (AetherMint), one slate glass surface for everything inside it.
  *
  * CONNECTED-STATE ANIMATION. While the tunnel is up, the card edge carries a
  * light show: segments of light travel around the border and breathe in length,
@@ -1040,10 +1043,10 @@ private fun formatRate(v: Long): String = formatBytes(v) + "/s"
 private val CARD_RADIUS = 26.dp
 private val CARD_SHAPE = RoundedCornerShape(CARD_RADIUS)
 private val SUB_SHAPE = RoundedCornerShape(18.dp)
-private val SUB_BORDER = Color(0x1F3EDBB0)
+private val SUB_BORDER = AetherMint.copy(alpha = 0.12f)
 private val DIVIDER = Color(0x1FFFFFFF)
-private val IDLE_ACCENT = Color(0xFF4C8DFF)
-private val ERROR_ACCENT = Color(0xFFFF5C7A)
+private val IDLE_ACCENT = AetherViolet
+private val ERROR_ACCENT = AetherError
 private const val LATENCY_REFRESH_MS = 4_000L
 
 /** 1.5.0: the smallest size a chain label is shown at before a shorter form of it is used. */
@@ -1064,5 +1067,5 @@ private const val PING_BARS = 26
 private val PING_BAR_GAP = 3.dp
 private val PING_WAVE_HEIGHT = 22.dp
 private const val PING_WAVE_MS = 1_500
-private val PING_FAIR = Color(0xFFFFB43C)
-private val PING_POOR = Color(0xFFFF5C7A)
+private val PING_FAIR = AetherAmber
+private val PING_POOR = AetherError
