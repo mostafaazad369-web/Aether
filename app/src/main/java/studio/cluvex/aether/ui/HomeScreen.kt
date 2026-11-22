@@ -71,6 +71,7 @@ import studio.cluvex.aether.ui.settings.SettingsHost
 import studio.cluvex.aether.ui.settings.SettingsNavRow
 import studio.cluvex.aether.ui.settings.SettingsRoute
 import studio.cluvex.aether.ui.theme.AetherMint
+import studio.cluvex.aether.ui.theme.AetherError
 import studio.cluvex.aether.ui.theme.AetherViolet
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -144,10 +145,9 @@ private fun HomeSurface(
     }
 
     val accent = when (mode) {
-        // Brand mint, the same accent the connection card and its animated edge
-        // use, so the whole screen reads as one palette.
+        // Keep the home backdrop in sync with the semantic state accents.
         ButtonMode.CONNECTED -> AetherMint
-        ButtonMode.ERROR -> Color(0xFFFF5C7A)
+        ButtonMode.ERROR -> AetherError
         else -> AetherViolet
     }
 
