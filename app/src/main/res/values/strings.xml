@@ -309,6 +309,7 @@
     <string name="ping_quality_poor">Poor</string>
     <string name="ping_quality_measuring">Measuring</string>
     <string name="ping_quality_offline">Not connected</string>
+    <string name="ping_quality_failed">Measurement failed</string>
 
     <!-- 1.2.7: the settings screen, the in-app language switch and the
          cached-endpoint budget -->
