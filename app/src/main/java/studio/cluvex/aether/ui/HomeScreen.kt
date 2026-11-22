@@ -148,7 +148,7 @@ private fun HomeSurface(
         // use, so the whole screen reads as one palette.
         ButtonMode.CONNECTED -> AetherMint
         ButtonMode.ERROR -> Color(0xFFFF5C7A)
-        else -> Color(0xFF5B93FF)
+        else -> AetherViolet
     }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
