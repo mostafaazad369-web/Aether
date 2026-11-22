@@ -1554,9 +1554,10 @@ class AetherVpnService : VpnService() {
      * SMART AUTO (root-cause rework of the broken Auto protocol): fingerprint
      * the network's DPI first (see [SmartAuto]), then walk an ordered ladder
      * of concrete strategies — protocol + obfuscation + the IP ranges that
-     * actually answered on THIS network — until one passes the full 5-step
-     * self-test. Returns the strategy that won so the supervisor restarts the
-     * engine with the SAME working configuration.
+     * actually answered on THIS network — until one passes the configured
+     * readiness gate (the five-step self-test when verification is enabled).
+     * Returns the strategy that won so the supervisor restarts the engine with
+     * the SAME working configuration.
      */
     private suspend fun connectSmartAuto(userProfile: ConnectionProfile): ConnectionProfile {
         AetherController.setState(ConnectionState.Launching)
@@ -1614,8 +1615,10 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * Walks a ladder of strategies until one comes up and passes the full
-     * self-test. Each failed rung is torn down before the next is tried.
+     * Walks a ladder of strategies until one comes up and passes the configured
+     * readiness gate. When verification is enabled this is the full self-test;
+     * when the user disables it, the listener/process readiness policy applies.
+     * Each failed rung is torn down before the next is tried.
      */
     private suspend fun runLadder(
         plan: List<AutoCandidate>,
