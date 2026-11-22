@@ -309,9 +309,9 @@ object SmartAuto {
             )
         }
 
-        // Last resort: the top strategy again, but scanning the engine's FULL
-        // built-in ranges with the user's own scan mode — covers the rare case
-        // where the probe-narrowed ranges themselves were the problem.
+        // Last resort: repeat the top strategy with the user's original scan
+        // mode. AUTO endpoints expand back to the full built-in ranges; manually
+        // pinned peers/ranges remain untouched by design.
         val first = ladder.first()
         var fbProfile = first.profile.copy(scanMode = user.scanMode)
         if (!keepUserEndpoint) {
@@ -320,8 +320,9 @@ object SmartAuto {
         val fallback = AutoCandidate(
             fbProfile,
             fbProfile.connectTimeoutMs(),
-            "${fbProfile.protocol.name} · noize=${fbProfile.noize.name.lowercase()} · full built-in ranges " +
-                "· scan=${user.scanMode.name.lowercase()} (last resort)",
+            "${fbProfile.protocol.name} · noize=${fbProfile.noize.name.lowercase()} · " +
+                (if (keepUserEndpoint) "user-pinned endpoint" else "full built-in ranges") +
+                " · scan=${user.scanMode.name.lowercase()} (last resort)",
         )
 
         val plan = (ladder + fallback).distinctBy { it.profile }
