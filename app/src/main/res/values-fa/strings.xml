@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">اِتِر</string>
-    <string name="tagline">آزادی، در یک لمس</string>
+    <string name="app_name">Aether Pro</string>
+    <string name="tagline">شبکه‌ی تو، کنترل دست تو</string>
 
     <string name="advanced">تنظیمات پیشرفته</string>
 
@@ -42,8 +42,8 @@
     <string name="reconnect_attempt">تلاش %1$d از %2$d</string>
 
     <string name="notif_channel">وضعیت ⁨VPN⁩</string>
-    <string name="notif_channel_desc">وضعیت اتصال اِتِر را نشان می‌دهد</string>
-    <string name="notif_title">اِتِر</string>
+    <string name="notif_channel_desc">وضعیت اتصال Aether Pro را نشان می‌دهد</string>
+    <string name="notif_title">Aether Pro</string>
     <string name="notif_action_disconnect">قطع اتصال</string>
 
     <string name="err_engine_timeout">هسته نتوانست پراکسی محلی را به‌موقع باز کند.</string>
@@ -90,7 +90,7 @@
     <string name="advanced_open">باز کردن تنظیمات پیشرفته</string>
 
     <!-- Quick Settings tile -->
-    <string name="qs_tile_label">اِتِر</string>
+    <string name="qs_tile_label">Aether Pro</string>
 
     <!-- Share VPN panel -->
     <string name="share_title">اشتراک‌گذاری ⁨VPN⁩</string>
