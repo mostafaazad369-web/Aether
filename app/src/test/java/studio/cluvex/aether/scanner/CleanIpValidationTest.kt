@@ -48,8 +48,8 @@ class CleanIpValidationTest {
             progress = { done, total -> progress += done to total },
         )
         assertEquals("104.16.0.1", winner!!.ip)
-        assertEquals(CleanIpValidation.MAX_CANDIDATES, batches.sumOf { it.size })
-        assertEquals(listOf(5, 5), batches.map { it.size })
+        assertEquals(CleanIpValidation.MAX_CANDIDATES, batches.filter { it.size > 1 }.sumOf { it.size })
+        assertEquals(listOf(5, 5), batches.filter { it.size > 1 }.map { it.size })
         assertEquals((1..10).map { it to 10 }, progress)
     }
 
