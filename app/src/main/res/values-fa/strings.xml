@@ -257,6 +257,7 @@
     <string name="strict_kill_switch_title">کیل سوییچ سخت‌گیرانه</string>
     <string name="strict_kill_switch_desc">حتی پس از قطع دستی هم مسدودسازی ادامه می‌یابد تا زمانی که خودتان آن را لغو کنید</string>
     <string name="state_killswitch">کیل سوییچ فعال است - ترافیک مسدود شد</string>
+    <string name="state_killswitch_failed">فعال‌سازی کیل سوییچ ناموفق بود - ممکن است ترافیک محافظت نشود</string>
     <string name="ipv6_leak_title">محافظت در برابر نشت ⁨IPv6⁩</string>
     <string name="ipv6_leak_desc">ترافیک ⁨IPv6⁩ نیز از داخل تونل عبور می‌کند</string>
     <string name="smart_reconnect_title">اتصال مجدد هوشمند</string>
