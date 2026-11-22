@@ -628,7 +628,7 @@ private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
         MetaSlide(
             label = stringResource(R.string.meta_latency),
             value = latency,
-            below = { PingStrength(connected = connected, ms = if (stale) -1L else lastMs) },
+            below = { PingStrength(connected = connected, ms = if (stale) -1L else lastMs, failed = ping.error) },
             stale = stale,
         )
     }
@@ -747,7 +747,7 @@ private fun MetaSlide(
  * `drawBehind`, and the transition is only composed while connected.
  */
 @Composable
-private fun PingStrength(connected: Boolean, ms: Long) {
+private fun PingStrength(connected: Boolean, ms: Long, failed: Boolean) {
     // 1 = excellent, 0 = unusable. Reused for height, speed and colour so the
     // three can never disagree.
     val strength = when {
@@ -765,7 +765,7 @@ private fun PingStrength(connected: Boolean, ms: Long) {
     )
     // One grade drives the word AND the colour, so green bars can never sit
     // under the word "Fair" again. See [pingGrade].
-    val grade = pingGrade(connected, ms)
+    val grade = pingGrade(connected, ms, failed)
     val tint = pingTint(grade)
     val quality = stringResource(pingQualityRes(grade))
 
@@ -866,10 +866,11 @@ private fun PingStrength(connected: Boolean, ms: Long) {
  * decides. One enum, one set of cut-offs, and the comment in [PingStrength] that
  * promised the three "can never disagree" is now actually true.
  */
-private enum class PingGrade { OFFLINE, MEASURING, EXCELLENT, GOOD, FAIR, POOR }
+private enum class PingGrade { OFFLINE, MEASURING, FAILED, EXCELLENT, GOOD, FAIR, POOR }
 
-private fun pingGrade(connected: Boolean, ms: Long): PingGrade = when {
+private fun pingGrade(connected: Boolean, ms: Long, failed: Boolean): PingGrade = when {
     !connected -> PingGrade.OFFLINE
+    failed -> PingGrade.FAILED
     ms < 0L -> PingGrade.MEASURING
     ms <= PING_EXCELLENT_MS -> PingGrade.EXCELLENT
     ms <= PING_GOOD_MS -> PingGrade.GOOD
@@ -881,12 +882,13 @@ private fun pingTint(grade: PingGrade): Color = when (grade) {
     PingGrade.EXCELLENT, PingGrade.GOOD -> AetherMint
     PingGrade.FAIR -> PING_FAIR
     PingGrade.POOR -> PING_POOR
-    PingGrade.OFFLINE, PingGrade.MEASURING -> CardTextDim
+    PingGrade.OFFLINE, PingGrade.MEASURING, PingGrade.FAILED -> CardTextDim
 }
 
 private fun pingQualityRes(grade: PingGrade): Int = when (grade) {
     PingGrade.OFFLINE -> R.string.ping_quality_offline
     PingGrade.MEASURING -> R.string.ping_quality_measuring
+    PingGrade.FAILED -> R.string.ping_quality_failed
     PingGrade.EXCELLENT -> R.string.ping_quality_excellent
     PingGrade.GOOD -> R.string.ping_quality_good
     PingGrade.FAIR -> R.string.ping_quality_fair
