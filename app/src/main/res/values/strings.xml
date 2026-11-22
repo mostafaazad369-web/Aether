@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Aether</string>
-    <string name="tagline">Freedom, in one tap</string>
+    <string name="app_name">Aether Pro</string>
+    <string name="tagline">Your network. Your control.</string>
 
     <string name="advanced">Advanced settings</string>
 
@@ -42,8 +42,8 @@
     <string name="reconnect_attempt">Attempt %1$d of %2$d</string>
 
     <string name="notif_channel">VPN status</string>
-    <string name="notif_channel_desc">Shows the Aether connection status</string>
-    <string name="notif_title">Aether</string>
+    <string name="notif_channel_desc">Shows the Aether Pro connection status</string>
+    <string name="notif_title">Aether Pro</string>
     <!--
       1.3.1, issue #20: the notification's action BUTTON used to be labelled with
       state_disconnecting ("Disconnecting…"), so the ongoing notification read
@@ -96,7 +96,7 @@
     <string name="advanced_open">Open advanced settings</string>
 
     <!-- Quick Settings tile -->
-    <string name="qs_tile_label">Aether</string>
+    <string name="qs_tile_label">Aether Pro</string>
 
     <!-- Share VPN panel -->
     <string name="share_title">Share VPN</string>
