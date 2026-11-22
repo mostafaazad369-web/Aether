@@ -39,8 +39,7 @@ class SmartAutoPlanTest {
         assertTrue(plan.all { it.profile.endpointMode == EndpointMode.MANUAL_PEER })
         assertTrue(plan.all { it.profile.manualPeer == user.manualPeer })
         assertTrue(plan.all { it.profile.noize == Noize.AGGRESSIVE })
-        assertTrue(plan.all { it.profile.scanMode == ScanMode.TURBO } ||
-            plan.last().profile.scanMode == ScanMode.THOROUGH)
+        assertTrue(plan.dropLast(1).all { it.profile.scanMode == ScanMode.TURBO })
 
         val fallback = plan.last()
         assertEquals(ScanMode.THOROUGH, fallback.profile.scanMode)
