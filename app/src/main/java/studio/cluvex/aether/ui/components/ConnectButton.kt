@@ -43,6 +43,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import studio.cluvex.aether.R
+import studio.cluvex.aether.ui.theme.AetherError
+import studio.cluvex.aether.ui.theme.AetherMint
+import studio.cluvex.aether.ui.theme.AetherViolet
 
 enum class ButtonMode { IDLE, BUSY, CONNECTED, ERROR }
 
@@ -82,10 +85,10 @@ fun ConnectButton(
     val connected = mode == ButtonMode.CONNECTED
     val busy = mode == ButtonMode.BUSY
     val accent = when (mode) {
-        ButtonMode.IDLE -> Color(0xFF4C8DFF)
-        ButtonMode.BUSY -> Color(0xFF4C8DFF)
-        ButtonMode.CONNECTED -> Color(0xFF32E0C4)
-        ButtonMode.ERROR -> Color(0xFFFF5C7A)
+        ButtonMode.IDLE -> AetherViolet
+        ButtonMode.BUSY -> AetherViolet
+        ButtonMode.CONNECTED -> AetherMint
+        ButtonMode.ERROR -> AetherError
     }
     val animatedAccent by animateColorAsState(accent, tween(600), label = "accent")
 
