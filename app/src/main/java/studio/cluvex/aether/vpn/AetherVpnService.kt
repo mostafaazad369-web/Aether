@@ -2970,13 +2970,22 @@ class AetherVpnService : VpnService() {
         stopJob = scope.launch(Dispatchers.IO) {
             cleanupForwardingOnly()
             stopCustom()
-            ensureLockdownTun(profile)
-            lockdownTunActive = true
-            Diagnostics.resetChecks()
-            EngineMeta.reset()
-            AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
-            updateNotification(getString(R.string.state_killswitch))
+            try {
+                ensureLockdownTun(profile)
+                lockdownTunActive = true
+                Diagnostics.resetChecks()
+                EngineMeta.reset()
+                AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
+                updateNotification(getString(R.string.state_killswitch))
+            } catch (e: Exception) {
+                lockdownTunActive = false
+                val message = getString(R.string.state_killswitch_failed)
+                DiagnosticsLog.e(TAG, "Kill switch TUN could not be established: ${e.javaClass.simpleName}: ${e.message}")
+                AetherController.setState(ConnectionState.Error(message))
+                updateNotification(message)
+            }
             AetherTileService.requestUpdate(this@AetherVpnService)
+            AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
             job?.join()
         }
     }
@@ -3038,8 +3047,16 @@ class AetherVpnService : VpnService() {
         // is for: the tunnel is down, v4 is held, and v6 is not.
         builder.addAddress(TunnelConfig.TUN_IPV6, TunnelConfig.TUN_IPV6_PREFIX)
         builder.addRoute("::", 0)
-        tun = runCatching { builder.establish() }.getOrNull()
+        tun = requireLockdownTun(runCatching { builder.establish() }.getOrNull())
     }
+
+    /**
+     * Do not report lockdown active unless Android returned a live TUN descriptor.
+     * Kept separate so the failure contract can be regression-tested without an
+     * Android VPN stack or a real interface.
+     */
+    internal fun requireLockdownTun(descriptor: ParcelFileDescriptor?): ParcelFileDescriptor =
+        checkNotNull(descriptor) { "Android did not establish the kill-switch VPN interface" }
 
     /**
      * 1.6.0: every native teardown names its reason. The body is unchanged
