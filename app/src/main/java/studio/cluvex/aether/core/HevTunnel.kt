@@ -83,7 +83,9 @@ object HevTunnel {
         )
     }
 
-    /** Requests hev to quit. Safe to call repeatedly. */
+    /** Requests a generation-scoped HEV stop. Safe to call repeatedly.
+     * The native worker owns a duplicate of the TUN fd until it has fully exited.
+     */
     fun stop() {
         if (!TProxyService.available) return
         try {
