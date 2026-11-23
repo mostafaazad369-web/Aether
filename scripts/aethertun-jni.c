@@ -160,7 +160,6 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
     args->generation = generation_counter;
     active_generation = args->generation;
     state = TUNNEL_STARTING;
-    config_ready = false;
     stop_dispatched = false;
 
     rc = pthread_attr_init(&attr);
@@ -173,7 +172,6 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
     if (rc != 0) {
         state = TUNNEL_IDLE;
         active_generation = 0;
-        config_ready = false;
         stop_dispatched = false;
     }
     pthread_mutex_unlock(&lock);
