@@ -107,6 +107,13 @@ object ConfigImporter {
 
     // ------------------------------------------------------------- helpers
 
+    /** Shared URL policy for the initial subscription URL and every redirect hop. */
+    internal fun validateSubscriptionUrl(url: URL) {
+        if (!url.protocol.equals("https", ignoreCase = true) || url.userInfo != null) {
+            throw ConfigImportException("subscription links and redirects must use HTTPS without embedded credentials")
+        }
+    }
+
     private fun download(url: String): ByteArray {
         // Subscription URLs can contain credentials. Never send them over cleartext,
         // and never let an HTTPS endpoint downgrade the request through a redirect.
@@ -115,9 +122,7 @@ object ConfigImporter {
         }
         val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
         for (redirect in 0..MAX_REDIRECTS) {
-            if (!target.protocol.equals("https", ignoreCase = true) || target.userInfo != null) {
-                throw ConfigImportException("subscription links and redirects must use HTTPS without embedded credentials")
-            }
+            validateSubscriptionUrl(target)
             val opened = if (port in 1..65535) {
                 target.openConnection(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
             } else {
@@ -141,9 +146,7 @@ object ConfigImporter {
                     val next = runCatching { URL(target, location) }.getOrElse {
                         throw ConfigImportException("subscription redirect address is invalid")
                     }
-                    if (!next.protocol.equals("https", ignoreCase = true) || next.userInfo != null) {
-                        throw ConfigImportException("subscription redirects must remain on HTTPS")
-                    }
+                    validateSubscriptionUrl(next)
                     target = next
                     continue
                 }
