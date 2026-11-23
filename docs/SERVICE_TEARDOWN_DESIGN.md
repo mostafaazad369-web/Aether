@@ -197,21 +197,31 @@ The pinned upstream implementation was also traced more closely: `hev_socks5_tun
 Implementation remains deferred: this audit identifies the full start/stop state contract, but no runtime JNI behavior has been changed or executed in this step.
 
 
-### Startup readiness boundary: worker creation is not HEV readiness
+### Startup-stop behavior in the pinned HEV core
 
-A further constraint was confirmed by reading the complete pinned `src/hev-main.c` and the Kotlin facade. The current bridge can know that `pthread_create()` succeeded, and its worker can know that it is about to call `hev_socks5_tunnel_main()`; neither event proves that HEV can safely accept `hev_socks5_tunnel_quit()`.
+A complete read of the pinned `src/hev-socks5-tunnel.c` corrected the earlier readiness-hook concern. The upstream core explicitly handles a stop request racing its own initialization:
 
-The pinned upstream main path performs configuration loading, logger initialization, task-system initialization, `lwip_init()`, and `hev_socks5_tunnel_init(tun_fd)` before entering `hev_socks5_tunnel_run()`. The public API exposes no startup-ready callback or query. The bridge therefore cannot safely implement “stop during STARTING” by simply waiting for the pthread entry point or by setting RUNNING immediately after thread creation. Calling quit before the event task / stop signaling target is initialized may be ineffective or unsafe; the public API does not document that race as supported.
+- `hev_socks5_tunnel_init()` sets `SYNC_SEND` only after tunnel, gateway, event task, lwIP tasks, mapped DNS, and task mutex initialization have succeeded.
+- `hev_socks5_tunnel_stop()` coordinates with that publication using the `SYNC_WAIT`, `SYNC_SEND`, `SYNC_SENT`, and `SYNC_STOP` bits in `tsync`.
+- If stop wins before `SYNC_SEND` is published, it records `SYNC_STOP` rather than writing to an event fd that is not yet ready.
+- `hev_socks5_tunnel_run()` checks and clears `SYNC_STOP` before scheduling the event, lwIP I/O, and timer tasks. If the stop bit was set during startup, run returns without entering the event loop; the outer main path then performs normal tunnel/task-system/logger finalization.
+- If stop arrives after `SYNC_SEND` is published, the core marks `SYNC_SENT` and writes to the initialized event socket. The event task consumes that event, terminates sessions, and joins the lwIP tasks.
 
-The lifecycle design must consequently include an explicit readiness boundary supplied by a reviewed native-core integration. Preferred options, in order:
+Thus, for this exact pinned upstream revision, the public quit/stop path is designed to tolerate a stop request before the event loop begins. A separate application-level readiness callback is not required merely to defer stop until event-fd initialization. This conclusion depends on the reviewed `tsync` protocol and must be re-audited if HEV is upgraded; it is not a generic guarantee of the public API independent of its implementation.
 
-1. Add a small, documented readiness callback/hook to the pinned HEV source at the point after successful `hev_socks5_tunnel_init()` and immediately before `hev_socks5_tunnel_run()`. The callback must be invoked on every relevant startup path only after the quit target is valid. The application bridge records READY for the matching generation and only then dispatches a pending quit.
-2. If modifying upstream is rejected, do not claim stop-during-start is safe. The bridge must expose startup as unresolved and fail closed at the Kotlin owner level until a reliable readiness/exit observation is available; a guessed sleep or “thread entered” signal is not an acceptable substitute.
+The application bridge still has two independent defects that the upstream protocol does not solve:
 
-The first option requires a reproducible patch applied to the exact pinned checkout by `scripts/build-natives.sh` (or a versioned patch file applied by `scripts/fetch-natives.sh`), plus a build-time assertion that the hook exists exactly once. The callback must not call JNI or block. It should only publish the generation's readiness and wake the bridge's lifecycle coordinator. The coordinator can then issue the deferred quit outside its mutex.
+1. The bridge's single Boolean conflates STARTING, active execution, stop requested, and exited. Duplicate start can report success while startup allocation/thread creation is unresolved, and Kotlin can permit a new start before the previous worker exits.
+2. The worker is detached and the bridge does not publish a generation-specific completion signal after `hev_socks5_tunnel_main()` returns. The Kotlin `running` flag is set on pthread creation and cleared immediately after quit request, neither of which is an authoritative native lifecycle boundary.
 
-There is also a subtle early-exit case: config parsing, logger setup, task-system setup, or tunnel initialization can fail before READY. The worker must publish EXITED with the actual return code on every such path, and any stop waiter must be awakened. A failed start must not be reported as a successful active tunnel merely because a pthread was created.
+The revised bridge should therefore reserve a generation before startup work, serialize start/stop transitions, and use a condition variable to publish worker completion after the upstream main function has returned. It may issue the upstream quit during STARTING because the pinned core's `SYNC_STOP` protocol handles that case. It must still prevent a new generation until the previous worker has published EXITED. Any wait must release the mutex needed by the worker to publish completion, and timeout must remain “completion unknown”, never “stopped”.
 
-The current Kotlin API comments are more optimistic than their actual contract: `TProxyStartService()` returns after spawning a thread, not after HEV is ready; `HevTunnel.start()` sets its Boolean to true on that spawn result. Likewise, `TProxyStopService()` only requests quit and `HevTunnel.stop()` clears its Boolean immediately, not after worker exit. These booleans are presentation hints, not authoritative lifecycle state. They must be replaced or narrowed only together with the native readiness/completion protocol, not patched independently.
+Early failures before `hev_socks5_tunnel_run()` also need to publish EXITED with the actual return code and wake waiters. A pthread-create success is not proof that HEV initialized successfully. The C bridge's duplicate-start result and Kotlin facade should distinguish “same generation already accepted” from “new worker confirmed ready”; public API semantics must not imply readiness where only thread creation is known.
 
-No runtime change was made: this section records the additional upstream hook requirement before the JNI state machine is implemented.
+### Build integration and test requirements
+
+The native bridge is compiled directly from `scripts/aethertun-jni.c` by `scripts/build-natives.sh` for each Android ABI, with `-Wall -Werror` and `-Wl,--no-undefined`. Gradle has no CMake / externalNativeBuild target and the current native script does not contain a concurrency test target.
+
+Before shipping a runtime lifecycle patch, add a host-side test harness for the bridge state machine using injected fake HEV entry points, or an equivalent native test target. It should deterministically cover: concurrent duplicate start, stop before worker entry, stop while HEV startup is in progress, stop after event-loop entry, main returning with an error, pthread creation failure, repeated stop, and restart attempted before prior completion. Then build the Android bridge for all three configured ABIs and run service-level lifecycle tests. None of those executions has been performed as part of this documentation correction.
+
+No runtime JNI behavior was changed in this step. The previous claim that a separate upstream readiness hook is mandatory is superseded by this source-level finding; the required native fix remains generation-aware completion and serialized start/stop.
