@@ -28,14 +28,37 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
-    fun `redirect targets are subject to the same HTTPS policy`() {
+    fun `relative and absolute HTTPS redirect targets are accepted`() {
         val base = URL("https://subscriptions.example.net/config")
-        val secure = URL(base, "/v2/config")
-        ConfigImporter.validateSubscriptionUrl(secure)
+        val relative = URL(base, "/v2/config")
+        val absolute = URL(base, "https://cdn.example.net/v2/config")
 
+        ConfigImporter.validateSubscriptionRedirect(relative, 1)
+        ConfigImporter.validateSubscriptionRedirect(absolute, 2)
+    }
+
+    @Test
+    fun `redirect targets cannot downgrade to HTTP`() {
+        val base = URL("https://subscriptions.example.net/config")
         val downgrade = URL(base, "http://subscriptions.example.net/cleartext")
+
         assertThrows(ConfigImportException::class.java) {
-            ConfigImporter.validateSubscriptionUrl(downgrade)
+            ConfigImporter.validateSubscriptionRedirect(downgrade, 1)
         }
+    }
+
+    @Test
+    fun `five redirects are allowed`() {
+        val target = URL("https://subscriptions.example.net/config")
+        ConfigImporter.validateSubscriptionRedirect(target, 5)
+    }
+
+    @Test
+    fun `sixth redirect is rejected`() {
+        val target = URL("https://subscriptions.example.net/config")
+        val error = assertThrows(ConfigImportException::class.java) {
+            ConfigImporter.validateSubscriptionRedirect(target, 6)
+        }
+        assertTrue(error.message.orEmpty().contains("too many redirects"))
     }
 }
