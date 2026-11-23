@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -351,7 +352,7 @@ private fun HomeSurface(
                                 shape = CircleShape,
                                 modifier = Modifier
                                     .clip(CircleShape)
-                                    .clickable { onOpenSettings(SettingsRoute.CUSTOM_CONFIGS) },
+                                    .clickable(role = Role.Button) { onOpenSettings(SettingsRoute.CUSTOM_CONFIGS) },
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
@@ -367,7 +368,11 @@ private fun HomeSurface(
                                         modifier = Modifier.size(18.dp),
                                     )
                                     Text(
-                                        text = activeCustomConfig?.protocol?.short ?: stringResource(R.string.cc_title),
+                                        text = if (customConfigState.enabled && activeCustomConfig != null) {
+                                            activeCustomConfig.protocol.short
+                                        } else {
+                                            stringResource(R.string.cc_off)
+                                        },
                                         color = MaterialTheme.colorScheme.onSurface,
                                         style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
