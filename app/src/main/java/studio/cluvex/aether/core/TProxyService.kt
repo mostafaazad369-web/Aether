@@ -20,8 +20,9 @@ import android.util.Log
  * hev) kept working.
  *
  * libaethertun.so removes that failure mode categorically:
- *  - It binds hev's public C API plus Aether's pinned ready-callback entry
- *    point. Those symbols are resolved at LINK time (-Wl,--no-undefined), so
+ *  - It binds HEV's public C API plus Aether's pinned ready-callback and
+ *    generation-scoped stop entry points. Those symbols are resolved at LINK
+ *    time (-Wl,--no-undefined), so
  *    an upstream drift fails the native build rather than the user's device.
  *  - It exports conventional Java_* symbols that WE control, matching the
  *    external declarations below exactly (also verified at build time).
