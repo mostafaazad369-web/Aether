@@ -6,10 +6,15 @@ diff --git a/src/hev-main.c b/src/hev-main.c
  #include <signal.h>
  #include <string.h>
 +#include <stdint.h>
-@@ -28,1 +29,3 @@
+@@ -28,1 +29,7 @@
  #include "hev-main.h"
 +typedef void (*HevSocks5TunnelReadyCallback) (void *user_data);
 +
++int hev_socks5_tunnel_main_with_ready_callback (
++    const char *config_path, int tun_fd, uint64_t generation,
++    HevSocks5TunnelReadyCallback ready_callback, void *user_data);
++
+
 @@ -30,3 +33,5 @@
  static int
 -hev_socks5_tunnel_main_inner (int tun_fd)
