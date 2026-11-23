@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
@@ -35,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -42,6 +45,7 @@ import studio.cluvex.aether.ai.AiSession
 import studio.cluvex.aether.ui.ai.AiHostContext
 import studio.cluvex.aether.ui.ai.LocalAiHost
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import studio.cluvex.aether.R
 import studio.cluvex.aether.core.IpEndpoint
+import studio.cluvex.aether.custom.CustomConfigStore
 import studio.cluvex.aether.model.ConnectionProfile
 import studio.cluvex.aether.model.ConnectionState
 import studio.cluvex.aether.model.isBusy
@@ -103,6 +108,7 @@ fun HomeScreen(
     var route by remember { mutableStateOf<SettingsRoute?>(null) }
     val aiSettings by AiSession.settings.collectAsState()
     val context = LocalContext.current
+    LaunchedEffect(context) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { CustomConfigStore.load(context) } }
     val homeAnimationsEnabled by VisualPrefs.homeAnimationsFlow(context).collectAsState()
     CompositionLocalProvider(
         LocalHomeAnimationsEnabled provides homeAnimationsEnabled,
@@ -142,6 +148,8 @@ private fun HomeSurface(
     onOpenSettings: (SettingsRoute) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val customConfigState by CustomConfigStore.state.collectAsState()
+    val activeCustomConfig = customConfigState.active
     val mode = when {
         state.isConnected -> ButtonMode.CONNECTED
         state.isBusy -> ButtonMode.BUSY
@@ -326,9 +334,48 @@ private fun HomeSurface(
 
                     run {
                         Spacer(Modifier.height(6.dp))
-                        PresetSelector(presets, activePresetId, presets.isEmpty() || state.isConnected || state.isBusy || presetBusy || !studio.cluvex.aether.ui.components.LocalHomeVisible.current,
-                            onSelectPreset, onSavePresetAs, onDeletePreset,
-                            onImport = onImportPresets, onExport = onExportPresets, onRename = onRenamePreset)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PresetSelector(
+                                presets, activePresetId,
+                                presets.isEmpty() || state.isConnected || state.isBusy || presetBusy || !studio.cluvex.aether.ui.components.LocalHomeVisible.current,
+                                onSelectPreset, onSavePresetAs, onDeletePreset,
+                                onImport = onImportPresets, onExport = onExportPresets, onRename = onRenamePreset,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable { onOpenSettings(SettingsRoute.CUSTOM_CONFIGS) },
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Route,
+                                        contentDescription = stringResource(R.string.cc_title),
+                                        tint = if (customConfigState.enabled && activeCustomConfig != null)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        text = activeCustomConfig?.protocol?.short ?: stringResource(R.string.cc_title),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
 
