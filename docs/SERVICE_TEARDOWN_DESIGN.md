@@ -138,7 +138,7 @@ AetherProcess.start() calls ProcessBuilder.start() and then stores the returned 
 
 ### Remaining unknowns and dependency edges
 
-- CustomSession is imported and used by AetherVpnService, but no CustomSession source file appears in the branch tree. Its backing storage, static/process scope, and thread-safety therefore remain unverified; do not assume it is merely UI metadata until its dependency/source origin is located.
+- CustomSession is defined in custom/CustomConfigStore.kt as a process-global object backed by MutableStateFlow<Info?>. Its set() simply assigns the flow value; it has no resource handles, locks, generation, or lifecycle coordination. It is presentation/session metadata rather than a native resource owner, but the value can still be cleared or replaced by overlapping sessions unless the service owner scopes publication to a valid lease.
 - TProxyService is the JNI boundary behind HevTunnel. Its native stop semantics and whether it waits for the native event loop to exit need inspection in the JNI/C implementation.
 - The service cleanup order is deliberate: stop sharing first; stop the userspace/hev forwarder; stop the external transport; stop TorSocksFront before the engine that provides its upstream; stop the engine; close the TUN descriptor. Lockdown cleanup uses the forwarding-only path and intentionally retains the TUN. These are dependency edges, not arbitrary list ordering.
 - ShareBridge.stop() is asynchronous, and SocksTunBridge.stop() / TorSocksFront.stop() request shutdown without joining all workers. The current code does not establish a single bounded "all owned work has exited" barrier.
@@ -147,3 +147,12 @@ AetherProcess.start() calls ProcessBuilder.start() and then stores the returned 
 ### Updated implementation decision
 
 Do not add runtime ownership code yet. The inspection confirms that the resource registry must represent both the resource handle and its in-flight lifecycle operation, and must preserve dependency ordering. A safe first slice should not be a generic AutoCloseable bag: it needs resource-specific start/stop adapters, session leases, a start-in-flight barrier, and a teardown result that distinguishes "stop requested" from "workers/process/native loop confirmed stopped". It must also model the lockdown TUN as retained while forwarding resources drain. Before implementation, inspect TProxyService JNI/C shutdown and resolve the CustomSession source, then write integration tests around the real service lifecycle and fakeable resource adapters.
+
+
+### JNI shutdown detail
+
+The native bridge was also inspected in scripts/aethertun-jni.c and its Kotlin declaration in TProxyService.kt. The C bridge protects its own running Boolean with a pthread mutex and creates the hev event loop on a detached pthread. The worker sets the native running flag false only after hev_socks5_tunnel_main() returns. However, TProxyStopService() only calls hev_socks5_tunnel_quit(); it does not join the detached worker or expose a completion acknowledgement. Therefore Kotlin HevTunnel.stop() returning is not evidence that the native event loop has exited.
+
+There is a concrete cross-layer race: HevTunnel.stop() calls the native quit function and immediately sets its Kotlin running flag false. If a new HevTunnel.start() arrives before the old detached worker exits, the Kotlin check permits it, but the C bridge still sees running=true and returns JNI_TRUE as "already running" without creating a new pthread. Kotlin then sets its flag true. When the old worker finally exits, C sets its own running flag false, but Kotlin's flag remains true. A later start can then be incorrectly treated as an already-running no-op even though no native worker remains. This is stronger than an unverified stop-latency concern and requires lifecycle serialization across the Kotlin facade and native bridge, plus an explicit native completion/join or generation-aware handshake. Do not patch only the Kotlin Boolean: the native worker completion must be represented.
+
+The native C bridge also claims running=true before allocating/copying startup arguments and rolls it back on setup or pthread_create failure. This protects duplicate native starts during creation, but does not solve the asynchronous quit/restart window because the worker is detached and quit has no join acknowledgement.
