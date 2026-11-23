@@ -167,3 +167,31 @@ The pinned upstream source was inspected at that exact commit. Its public API co
 The upstream API documentation does not promise a bounded shutdown duration. Therefore the app must not wait synchronously on the Android main thread or invent a short timeout as proof of safe release. The correct adapter design is to issue quit off the main thread, observe a native completion signal associated with the same start generation, and only then mark the HEV resource fully stopped / permit a new start. If the service is destroyed while this is pending, the process-level owner must retain the pending completion state independently of the Service coroutine scope. The native worker may remain detached only if the completion handshake is reliable; a joinable worker with a serialized stop/restart protocol is another option, but requires careful avoidance of joining while holding the mutex needed by the worker's completion path.
 
 Source provenance: upstream repository commit fc3f90040b8d4b537341c96538669a9b2e35d514. The application build no longer silently follows an unpinned default branch for this dependency.
+
+
+### Native bridge start-in-flight race (2026-11-23 follow-up)
+
+A second race exists before the detached pthread is even created. In `scripts/aethertun-jni.c`, `TProxyStartService()` acquires the bridge mutex, changes the single `running` Boolean to true, and releases the mutex **before** it obtains/copies the Java config string, allocates `StartArgs`, and calls `pthread_create()`. This creates an unrepresented STARTING interval:
+
+- A concurrent second start sees `running == true` and returns JNI_TRUE as though a tunnel were already running, even though no worker may exist yet.
+- If the first caller subsequently fails allocation, JNI string acquisition, or `pthread_create()`, it rolls `running` back to false. The second caller has already been told its start succeeded, but no worker was started for it.
+- A concurrent stop during this interval calls `hev_socks5_tunnel_quit()` even though hev initialization/event descriptors may not yet exist. The bridge does not serialize stop against the in-flight start or defer the quit until the core is ready.
+
+This is not fixed by adding a Kotlin synchronized block alone: native entry points can be called from other JNI callers in the future, and the C bridge must own the authoritative lifecycle state. Nor is changing the Boolean to an enum sufficient unless transitions and condition signaling cover argument preparation, thread creation, worker entry, quit request, and worker return.
+
+The native bridge therefore needs at least distinct `IDLE`, `STARTING`, `RUNNING`, `STOP_REQUESTED`, and `EXITED` states (or equivalent state plus a monotonically increasing generation). The implementation contract should be:
+
+1. Reserve a generation and enter STARTING under the native mutex before releasing it.
+2. Prepare the copied arguments and create the worker as part of that generation's startup transaction. Concurrent starts must wait for or observe that exact transaction; they must not report success merely because STARTING is occupied.
+3. A stop during STARTING must record a pending stop request. It must not call the upstream quit API until the worker has reached a point where the HEV core has initialized the event channel and can accept quit safely.
+4. The worker must publish RUNNING only for its own current generation, and on every return path publish EXITED / signal waiters after `hev_socks5_tunnel_main()` has returned and its internal finalization is complete.
+5. A restart must not enter a new generation until the prior generation is confirmed EXITED. Any wait/join must occur without holding the mutex needed by the worker to publish completion.
+6. JNI/Kotlin callers must distinguish “start accepted/in progress” from “worker running”, and “quit requested” from “worker exited”. A bounded wait result may time out, but timeout must never be translated into STOPPED.
+
+The pinned upstream implementation was also traced more closely: `hev_socks5_tunnel_main()` calls `hev_socks5_tunnel_main_inner()`, which initializes the task system and tunnel, runs the event loop, then performs tunnel/task-system/logger finalization before returning. `hev_socks5_tunnel_quit()` delegates to `hev_socks5_tunnel_stop()`, which signals the event task. The event task sets the run flag false, terminates sessions, and joins the lwIP I/O and timer tasks. This confirms that worker return is the correct completion boundary; observing only the event-loop stop request is too early.
+
+### Build integration confirmation
+
+`app/build.gradle.kts` confirms that HEV and the Aether engine are prebuilt by `scripts/build-natives.sh`; there is no Gradle CMake / externalNativeBuild target that would automatically compile or test a JNI change. The native bridge is compiled there directly from `scripts/aethertun-jni.c` with the NDK clang, `-Wall -Werror`, and `-Wl,--no-undefined`, once per ABI. The script verifies exported JNI symbols and HEV C API symbols, but it does not currently provide a native concurrency test target. A runtime patch therefore needs an explicit host-side C test harness or Android instrumentation coverage in addition to the existing symbol/link checks.
+
+Implementation remains deferred: this audit identifies the full start/stop state contract, but no runtime JNI behavior has been changed or executed in this step.
