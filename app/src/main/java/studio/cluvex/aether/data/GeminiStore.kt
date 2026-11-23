@@ -116,7 +116,8 @@ class GeminiStore(private val context: Context) {
     }
 
     /**
-     * Stores the key sealed with a hardware-backed AES-GCM key.
+     * Stores the key sealed with an AES-GCM key managed by Android Keystore.
+     * Hardware backing, when available, is device-dependent and not guaranteed.
      *
      * Trimmed first: an API key pasted from a web page almost always arrives with
      * a trailing newline or a stray space, and a key with whitespace in it fails
