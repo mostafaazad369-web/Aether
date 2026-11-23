@@ -1,5 +1,4 @@
 diff --git a/src/hev-main.h b/src/hev-main.h
-index 0000000..0000000 100644
 --- a/src/hev-main.h
 +++ b/src/hev-main.h
 @@ -13,6 +13,10 @@
@@ -16,7 +15,6 @@ index 0000000..0000000 100644
   * hev_socks5_tunnel_main:
   * @config_path: config file path
 diff --git a/src/hev-main.c b/src/hev-main.c
-index 0000000..0000000 100644
 --- a/src/hev-main.c
 +++ b/src/hev-main.c
 @@ -25,7 +25,8 @@
@@ -73,7 +71,6 @@ index 0000000..0000000 100644
 +    return hev_socks5_tunnel_main_inner (tun_fd, NULL, NULL);
  }
 diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
-index 0000000..0000000 100644
 --- a/src/hev-socks5-tunnel.c
 +++ b/src/hev-socks5-tunnel.c
 @@ -48,6 +48,23 @@ enum
