@@ -41,7 +41,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 +        ready_callback (user_data);
 +
      hev_socks5_tunnel_run ();
-@@ -95,9 +101,19 @@
+@@ -94,9 +100,19 @@
  EXPORT_SYMBOL int
  hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
  {
@@ -88,7 +88,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 --- a/src/hev-socks5-tunnel.h
 +++ b/src/hev-socks5-tunnel.h
-@@ -10,12 +10,14 @@
+@@ -11,12 +11,14 @@
  #define __HEV_SOCKS5_TUNNEL_H__
  
 +#include <stdint.h>
@@ -181,7 +181,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
      if (res & SYNC_WAIT) {
          usleep (500);
          goto retry;
-@@ -920,4 +968,17 @@
+@@ -919,4 +967,17 @@
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
