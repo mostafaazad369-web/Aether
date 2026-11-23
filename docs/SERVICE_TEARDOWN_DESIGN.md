@@ -66,3 +66,43 @@ Pure JVM tests can verify the coordinator's state machine and deterministic orde
 - Robolectric/instrumented lifecycle coverage for service destruction and revoke, plus a process-level test for child-process survival/cleanup where feasible.
 
 The existing integration test uses Robolectric for selected service logic, but does not currently exercise `onDestroy()`, real native processes, JNI shutdown, or process death. Passing pure coordinator tests must not be reported as proof of those behaviors.
+
+
+## Resource acquisition inventory (follow-up inspection)
+
+The current service has a split ownership model: some resources are held in instance fields, some are process/static singletons, and some are local variables until startup returns. The last category is the most important race to close.
+
+| Resource | Acquisition / publication observed | Release observed | Ownership concern |
+|---|---|---|---|
+| Session `AetherProcess` | Several paths use `engine = AetherProcess(...).also { it.start(...) }` (including the ordinary connect and custom paths) | `cleanupNativeOnlyImpl()`, fallback paths | The assignment to `engine` occurs only after `start()` returns. If destruction overlaps a blocking/partially completed start, cleanup may see `engine == null` while the local process object has already spawned a child. |
+| Smart Plus lane engines | Local `AetherProcess` is created in `runLane()`, then added to `raceEngines` (verify exact ordering in the current implementation before refactoring) | lane `finally`, plus `runRace()` final sweep | A process can exist before a shared registry can observe it unless registration precedes spawn. Parent cancellation only helps while the coroutine remains alive and is joined. |
+| External transport | Factory result is assigned to `externalTransport` before `transport.start()` | `cleanupNativeOnlyImpl()` and explicit fallback | Better publication order than the engine expression, but start/stop concurrency and transport-specific guarantees still need auditing. |
+| Xray | A runner is passed into `startXray()`; `runner.start()` executes on IO; `xray` is a service field | `stopXrayOnly()` under `xrayLock`; watcher may restart | The runner's exact publication point must be traced at each caller. The watcher can restart a process, so invalidating/cancelling it must be part of the same ownership transaction as stop. |
+| hev tunnel | `HevTunnel.start(config, fd)` then `tunnelStarted = true` | `HevTunnel.stop()` when `tunnelStarted` | A failure or teardown between native start and setting the flag can leave native state unrepresented by the boolean. |
+| userspace TUN bridge | Constructed, `bridge.start()`, then assigned to `tunBridge` | `tunBridge.stop()` and clear | Same publish-after-start window: teardown may not see a bridge whose start has completed or is in progress. |
+| TUN descriptor | `establishTun()` assigns the service's `tun` field (and lockdown separately rebuilds it) | `tun.close()` | Descriptor lifetime is coupled to hev/bridge; close must not race an in-flight bridge start or native reader. |
+| LAN share bridge | Static `ShareBridge.start/startSync` | static `ShareBridge.stop()` | Process-global state, not naturally scoped to a Service instance; must be covered by the process owner. |
+| Tor SOCKS front | Static `TorSocksFront.start()` | static `TorSocksFront.stop()` | Process-global listener; ordering relative to engine stop matters. |
+| Custom session | `CustomSession.set(...)` and service `customSelection` | `CustomSession.set(null)` in `stopCustom()` | Metadata/session publication must not outlive the actual Xray/chain processes. |
+
+The table is an initial call-site map, not proof of each dependency's internal thread safety. Before coding, inspect each implementation (especially `ExternalTransport`, `SocksTunBridge`, `HevTunnel`, `ShareBridge`, and `TorSocksFront`) and all start call sites, then define the owner API around their actual contracts.
+
+## Concrete race demonstrated by assignment order
+
+At multiple session-engine call sites the service assigns the field using an expression equivalent to:
+
+```kotlin
+engine = AetherProcess(nativeLibraryDir, filesDir).also { it.start(profile) }
+```
+
+Kotlin evaluates the right-hand side completely before assigning the field. `AetherProcess.start()` calls `ProcessBuilder.start()` and only then stores its `Process` handle inside that local `AetherProcess` instance. If `onDestroy()` runs while startup is in progress, service cleanup can observe `engine == null`; the local instance is not yet published to the service and its child process may survive. A generation check after `start()` would prevent a stale connection from being announced, but would not by itself stop that unpublished child.
+
+The owner refactor therefore needs a two-phase acquisition contract: register an owned resource handle before starting it, and make start completion/rollback part of that same ownership transaction. A plain post-start registration is insufficient.
+
+Similarly, `HevTunnel.start()` precedes `tunnelStarted = true`, and `SocksTunBridge.start()` precedes assignment to `tunBridge`. Those are additional start-before-publication windows. A boolean or nullable field cannot reliably represent a resource whose native start is in flight.
+
+## Revised implementation decision
+
+Do not introduce a coordinator that merely serializes calls to `cleanupNativeOnlyImpl()`. The first implementation slice, once the dependency contracts above are inspected, should be an ownership API with explicit states such as registered / starting / active / stopping / stopped, plus a generation/session lease. Resource registration must happen before any operation that can spawn a process, bind a listener, or enter JNI. The API must also support the lockdown TUN as a deliberately retained resource while forwarding resources are released.
+
+Until that API can own every listed resource and the crash path, leave the runtime teardown code unchanged. This avoids creating a false sense of safety from tests that only exercise a standalone mutex or generation counter.
