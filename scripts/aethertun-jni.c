@@ -170,7 +170,6 @@ JNIEXPORT void JNICALL
 Java_studio_cluvex_aether_core_TProxyService_TProxyStopService(
     JNIEnv *env, jclass clazz)
 {
-    bool dispatch_stop = false;
     (void)env;
     (void)clazz;
 
@@ -180,15 +179,16 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStopService(
         state = TUNNEL_STOP_REQUESTED;
     } else if (state == TUNNEL_RUNNING) {
         state = TUNNEL_STOP_REQUESTED;
-        if (config_ready && !stop_dispatched) {
-            stop_dispatched = true;
-            dispatch_stop = true;
-        }
+        stop_dispatched = true;
+        /*
+         * Keep the bridge lock through dispatch. Otherwise the worker could
+         * publish EXITED, a new generation could start, and this delayed
+         * process-global quit could accidentally stop that new generation.
+         * The worker needs this lock only after HEV main has returned.
+         */
+        hev_socks5_tunnel_quit();
     }
     pthread_mutex_unlock(&lock);
-
-    if (dispatch_stop)
-        hev_socks5_tunnel_quit();
 }
 
 JNIEXPORT jboolean JNICALL
