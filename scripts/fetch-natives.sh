@@ -9,8 +9,8 @@
 # Both are compiled later by scripts/build-natives.sh.
 #
 # Safe to re-run. All network access happens here / in CI, never on device.
-# By default we clone each repo's DEFAULT branch. To pin, export HEV_REF /
-# AETHER_REF; a missing ref falls back to the default branch instead of failing.
+# HEV is pinned to a reviewed upstream commit by default. Override HEV_REF only
+# deliberately; an unavailable ref is a hard failure (never silently use HEAD).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ mkdir -p "${NATIVE_DIR}"
 GH="https://""github.com"
 
 HEV_REPO="heiher/hev-socks5-tunnel"
-HEV_REF="${HEV_REF:-}"            # empty => default branch
+HEV_REF="${HEV_REF:-fc3f90040b8d4b537341c96538669a9b2e35d514}" # reviewed upstream commit; override only deliberately
 HEV_DIR="${NATIVE_DIR}/hev-socks5-tunnel"
 
 AETHER_REPO="${AETHER_REPO:-CluvexStudio/Aether}"
@@ -38,22 +38,20 @@ VENDORED_AETHER="${PROJECT_DIR}/native/aether"
 AETHER_FORCE_CLONE="${AETHER_FORCE_CLONE:-}"
 
 # clone_repo <url> <dir> <ref>
-# Tries the pinned ref first (tag or branch); on any failure cleanly falls back
-# to the repo's default branch. Always clones submodules recursively.
+# Fetch the requested ref explicitly, then check out the exact fetched commit.
+# Submodules are initialized only after checkout so gitlinks match that commit.
 clone_repo() {
   local url="$1" dir="$2" ref="$3"
   rm -rf "${dir}"
-  if [ -n "${ref}" ] && \
-     git clone --depth 1 --branch "${ref}" --recursive "${url}" "${dir}" 2>/dev/null; then
-    echo "   cloned ${url} @ ${ref}"
-    return 0
+  git clone --no-checkout --depth 1 "${url}" "${dir}"
+  if ! git -C "${dir}" fetch --depth 1 origin "${ref}"; then
+    echo "ERROR: could not fetch required HEV ref '${ref}' from ${url}; refusing to use a moving default branch." >&2
+    rm -rf "${dir}"
+    exit 1
   fi
-  if [ -n "${ref}" ]; then
-    echo "   ref '${ref}' not found on ${url}; using default branch"
-  fi
-  rm -rf "${dir}"
-  git clone --depth 1 --recursive "${url}" "${dir}"
-  echo "   cloned ${url} @ default branch"
+  git -C "${dir}" checkout --detach FETCH_HEAD
+  git -C "${dir}" submodule update --init --recursive
+  echo "   cloned ${url} @ $(git -C "${dir}" rev-parse HEAD)"
 }
 
 echo "==> Fetching hev-socks5-tunnel (tunnel core)"
