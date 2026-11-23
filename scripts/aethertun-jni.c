@@ -62,11 +62,11 @@ hev_ready_callback(void *user_data)
     bool dispatch_stop = false;
 
     pthread_mutex_lock(&lock);
-    config_ready = true;
     if (active_generation != args->generation) {
         pthread_mutex_unlock(&lock);
         return;
     }
+    config_ready = true;
     if (state == TUNNEL_STARTING) {
         state = TUNNEL_RUNNING;
     } else if (state == TUNNEL_STOP_REQUESTED && !stop_dispatched) {
@@ -166,6 +166,7 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
     }
     if (rc != 0) {
         state = TUNNEL_IDLE;
+        active_generation = 0;
         config_ready = false;
         stop_dispatched = false;
     }
@@ -184,6 +185,8 @@ JNIEXPORT void JNICALL
 Java_studio_cluvex_aether_core_TProxyService_TProxyStopService(
     JNIEnv *env, jclass clazz)
 {
+    uint64_t stop_generation = 0;
+    bool dispatch_stop = false;
     (void)env;
     (void)clazz;
 
@@ -191,18 +194,20 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStopService(
     if (state == TUNNEL_STARTING) {
         /* Defer quit until HEV confirms successful tunnel initialization. */
         state = TUNNEL_STOP_REQUESTED;
-        stop_generation = active_generation;
     } else if (state == TUNNEL_RUNNING) {
         state = TUNNEL_STOP_REQUESTED;
         stop_dispatched = true;
-        /*
-         * Keep the bridge lock through dispatch. Otherwise the worker could
-         * publish EXITED, a new generation could start, and this delayed
-         * process-global quit could accidentally stop that new generation.
-         * The worker needs this lock only after HEV main has returned.
-         */
-        hev_socks5_tunnel_quit();
+        stop_generation = active_generation;
+        dispatch_stop = true;
     }
+
+    /*
+     * Keep the bridge lock through dispatch. This prevents the worker from
+     * publishing EXITED and a new generation from starting before this stop
+     * has crossed into HEV. HEV also validates the generation token itself.
+     */
+    if (dispatch_stop)
+        hev_socks5_tunnel_quit_generation(stop_generation);
     pthread_mutex_unlock(&lock);
 }
 
