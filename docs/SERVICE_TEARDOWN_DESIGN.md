@@ -195,3 +195,23 @@ The pinned upstream implementation was also traced more closely: `hev_socks5_tun
 `app/build.gradle.kts` confirms that HEV and the Aether engine are prebuilt by `scripts/build-natives.sh`; there is no Gradle CMake / externalNativeBuild target that would automatically compile or test a JNI change. The native bridge is compiled there directly from `scripts/aethertun-jni.c` with the NDK clang, `-Wall -Werror`, and `-Wl,--no-undefined`, once per ABI. The script verifies exported JNI symbols and HEV C API symbols, but it does not currently provide a native concurrency test target. A runtime patch therefore needs an explicit host-side C test harness or Android instrumentation coverage in addition to the existing symbol/link checks.
 
 Implementation remains deferred: this audit identifies the full start/stop state contract, but no runtime JNI behavior has been changed or executed in this step.
+
+
+### Startup readiness boundary: worker creation is not HEV readiness
+
+A further constraint was confirmed by reading the complete pinned `src/hev-main.c` and the Kotlin facade. The current bridge can know that `pthread_create()` succeeded, and its worker can know that it is about to call `hev_socks5_tunnel_main()`; neither event proves that HEV can safely accept `hev_socks5_tunnel_quit()`.
+
+The pinned upstream main path performs configuration loading, logger initialization, task-system initialization, `lwip_init()`, and `hev_socks5_tunnel_init(tun_fd)` before entering `hev_socks5_tunnel_run()`. The public API exposes no startup-ready callback or query. The bridge therefore cannot safely implement “stop during STARTING” by simply waiting for the pthread entry point or by setting RUNNING immediately after thread creation. Calling quit before the event task / stop signaling target is initialized may be ineffective or unsafe; the public API does not document that race as supported.
+
+The lifecycle design must consequently include an explicit readiness boundary supplied by a reviewed native-core integration. Preferred options, in order:
+
+1. Add a small, documented readiness callback/hook to the pinned HEV source at the point after successful `hev_socks5_tunnel_init()` and immediately before `hev_socks5_tunnel_run()`. The callback must be invoked on every relevant startup path only after the quit target is valid. The application bridge records READY for the matching generation and only then dispatches a pending quit.
+2. If modifying upstream is rejected, do not claim stop-during-start is safe. The bridge must expose startup as unresolved and fail closed at the Kotlin owner level until a reliable readiness/exit observation is available; a guessed sleep or “thread entered” signal is not an acceptable substitute.
+
+The first option requires a reproducible patch applied to the exact pinned checkout by `scripts/build-natives.sh` (or a versioned patch file applied by `scripts/fetch-natives.sh`), plus a build-time assertion that the hook exists exactly once. The callback must not call JNI or block. It should only publish the generation's readiness and wake the bridge's lifecycle coordinator. The coordinator can then issue the deferred quit outside its mutex.
+
+There is also a subtle early-exit case: config parsing, logger setup, task-system setup, or tunnel initialization can fail before READY. The worker must publish EXITED with the actual return code on every such path, and any stop waiter must be awakened. A failed start must not be reported as a successful active tunnel merely because a pthread was created.
+
+The current Kotlin API comments are more optimistic than their actual contract: `TProxyStartService()` returns after spawning a thread, not after HEV is ready; `HevTunnel.start()` sets its Boolean to true on that spawn result. Likewise, `TProxyStopService()` only requests quit and `HevTunnel.stop()` clears its Boolean immediately, not after worker exit. These booleans are presentation hints, not authoritative lifecycle state. They must be replaced or narrowed only together with the native readiness/completion protocol, not patched independently.
+
+No runtime change was made: this section records the additional upstream hook requirement before the JNI state machine is implemented.
