@@ -20,9 +20,9 @@ import android.util.Log
  * hev) kept working.
  *
  * libaethertun.so removes that failure mode categorically:
- *  - It binds ONLY hev's stable public C API (hev_socks5_tunnel_main/quit/
- *    stats), which is resolved at LINK time in CI (-Wl,--no-undefined) — any
- *    upstream break fails the BUILD, never the user's device.
+ *  - It binds hev's public C API plus Aether's pinned ready-callback entry
+ *    point. Those symbols are resolved at LINK time (-Wl,--no-undefined), so
+ *    an upstream drift fails the native build rather than the user's device.
  *  - It exports conventional Java_* symbols that WE control, matching the
  *    external declarations below exactly (also verified at build time).
  *  - It defines its own JNI_OnLoad. ART finds JNI_OnLoad via dlsym() on the
