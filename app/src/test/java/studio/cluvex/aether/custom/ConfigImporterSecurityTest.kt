@@ -59,6 +59,6 @@ class ConfigImporterSecurityTest {
         val error = assertThrows(ConfigImportException::class.java) {
             ConfigImporter.validateSubscriptionRedirect(target, 6)
         }
-        assertTrue(error.message.orEmpty().contains("too many redirects"))
+        assertTrue(error.message.orEmpty().contains("redirected too many times"))
     }
 }
