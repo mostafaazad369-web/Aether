@@ -73,6 +73,26 @@ int hev_socks5_tunnel_main_with_ready_callback (
         "main-from-file wrapper",
     ),
     (
+        "    return hev_socks5_tunnel_main_with_ready_callback (config_path, tun_fd,\n"
+        "                                                       0, NULL, NULL);\n"
+        "}\n",
+        "    return hev_socks5_tunnel_main_with_ready_callback (config_path, tun_fd,\n"
+        "                                                       0, NULL, NULL);\n"
+        "}\n\n"
+        "EXPORT_SYMBOL int\n"
+        "hev_socks5_tunnel_main_with_ready_callback (\n"
+        "    const char *config_path, int tun_fd, uint64_t generation,\n"
+        "    HevSocks5TunnelReadyCallback ready_callback, void *user_data)\n"
+        "{\n"
+        "    int res = hev_config_init_from_file (config_path);\n"
+        "    if (res < 0)\n"
+        "        return -1;\n\n"
+        "    return hev_socks5_tunnel_main_inner (tun_fd, generation,\n"
+        "                                         ready_callback, user_data);\n"
+        "}",
+        "ready callback API implementation",
+    ),
+    (
         "    return hev_socks5_tunnel_main_inner (tun_fd);\n",
         "    return hev_socks5_tunnel_main_inner (tun_fd, 0, NULL, NULL);\n",
         "main-from-string wrapper",
