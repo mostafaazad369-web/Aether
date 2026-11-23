@@ -149,7 +149,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +    lifecycle_unlock ();
  
      return 0;
-@@ -852,4 +877,9 @@
+@@ -852,4 +878,9 @@
  {
      LOG_D ("socks5 tunnel fini");
  
@@ -159,7 +159,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +    lifecycle_unlock ();
 +
  retry:
-@@ -896,12 +926,19 @@
+@@ -896,12 +927,19 @@
 -void
 -hev_socks5_tunnel_stop (void)
 +static void
@@ -181,7 +181,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
      if (res & SYNC_WAIT) {
          usleep (500);
          goto retry;
-@@ -919,4 +967,17 @@
+@@ -919,4 +957,17 @@
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
