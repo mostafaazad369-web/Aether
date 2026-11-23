@@ -29,6 +29,8 @@ object ConfigImporter {
 
     private const val MAX_BYTES = 2 * 1024 * 1024
     private const val TIMEOUT_MS = 20_000
+    private const val MAX_REDIRECTS = 5
+    private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
     @Volatile
     private var cachedTables: NpvtCodec.Tables? = null
@@ -60,7 +62,10 @@ object ConfigImporter {
     ): List<CustomConfig> = withContext(Dispatchers.IO) {
         val t = ConfigParser.cleanInput(text)
         if (ConfigParser.looksLikeMtProto(t)) throw ConfigImportException(ConfigParser.MTPROTO_UNSUPPORTED)
-        val body = if (t.startsWith("https://", ignoreCase = true) || t.startsWith("http://", ignoreCase = true)) {
+        if (t.startsWith("http://", ignoreCase = true)) {
+            throw ConfigImportException("subscription links must use HTTPS to protect server credentials")
+        }
+        val body = if (t.startsWith("https://", ignoreCase = true)) {
             if (t.lines().size > 1) t else return@withContext ConfigParser.parseBytes(
                 download(t), source, { tables(context) }, { gen2Tables(context) }, password)
         } else {
@@ -104,35 +109,58 @@ object ConfigImporter {
     // ------------------------------------------------------------- helpers
 
     private fun download(url: String): ByteArray {
-        // The app is excluded from its own VPN, so a plain connection would fetch
-        // the subscription on the bare network even while connected: the operator
-        // would see (and could block) the subscription host. While a session runs
-        // the request goes through the tunnel's local SOCKS5 port instead.
+        // Subscription URLs can contain credentials. Never send them over cleartext,
+        // and never let an HTTPS endpoint downgrade the request through a redirect.
+        var target = runCatching { URL(url) }.getOrElse {
+            throw ConfigImportException("invalid subscription address")
+        }
         val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
-        val target = URL(url)
-        val opened = if (port in 1..65535) {
-            target.openConnection(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
-        } else {
-            target.openConnection()
+        for (redirect in 0..MAX_REDIRECTS) {
+            if (!target.protocol.equals("https", ignoreCase = true) || target.userInfo != null) {
+                throw ConfigImportException("subscription links and redirects must use HTTPS without embedded credentials")
+            }
+            val opened = if (port in 1..65535) {
+                target.openConnection(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            } else {
+                target.openConnection()
+            }
+            val conn = (opened as? javax.net.ssl.HttpsURLConnection)
+                ?: throw ConfigImportException("subscription address must use HTTPS")
+            try {
+                conn.connectTimeout = TIMEOUT_MS
+                conn.readTimeout = TIMEOUT_MS
+                conn.instanceFollowRedirects = false
+                conn.setRequestProperty("User-Agent", "Aether")
+                conn.setRequestProperty("Accept", "*/*")
+                val code = conn.responseCode
+                if (code in REDIRECT_CODES) {
+                    if (redirect == MAX_REDIRECTS) {
+                        throw ConfigImportException("subscription address redirected too many times")
+                    }
+                    val location = conn.getHeaderField("Location")
+                        ?: throw ConfigImportException("subscription redirect has no destination")
+                    val next = runCatching { URL(target, location) }.getOrElse {
+                        throw ConfigImportException("subscription redirect address is invalid")
+                    }
+                    if (!next.protocol.equals("https", ignoreCase = true) || next.userInfo != null) {
+                        throw ConfigImportException("subscription redirects must remain on HTTPS")
+                    }
+                    target = next
+                    continue
+                }
+                if (code !in 200..299) {
+                    throw ConfigImportException("the address answered HTTP $code")
+                }
+                return conn.inputStream.use { readLimited(it) }
+            } catch (e: ConfigImportException) {
+                throw e
+            } catch (e: Exception) {
+                throw ConfigImportException("the address could not be downloaded (\${e.javaClass.simpleName})")
+            } finally {
+                conn.disconnect()
+            }
         }
-        val conn = (opened as HttpURLConnection).apply {
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Aether")
-            setRequestProperty("Accept", "*/*")
-        }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) throw ConfigImportException("the address answered HTTP $code")
-            return conn.inputStream.use { readLimited(it) }
-        } catch (e: ConfigImportException) {
-            throw e
-        } catch (e: Exception) {
-            throw ConfigImportException("the address could not be downloaded (${e.javaClass.simpleName})")
-        } finally {
-            conn.disconnect()
-        }
+        throw ConfigImportException("subscription address could not be downloaded")
     }
 
     private fun readLimited(input: InputStream, limit: Int = MAX_BYTES): ByteArray {
