@@ -14,7 +14,6 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 +    const char *config_path, int tun_fd, uint64_t generation,
 +    HevSocks5TunnelReadyCallback ready_callback, void *user_data);
 +
-
 @@ -30,3 +33,5 @@
  static int
 -hev_socks5_tunnel_main_inner (int tun_fd)
