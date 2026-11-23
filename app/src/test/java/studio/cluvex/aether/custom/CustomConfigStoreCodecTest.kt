@@ -8,8 +8,8 @@ import org.junit.Test
 /**
  * Pure JVM coverage for the persisted custom-config payload.
  *
- * These tests deliberately exercise the codec only: Android Keystore encryption
- * is covered separately by device/instrumentation testing, not mocked here.
+ * These tests exercise only the JSON codec. They do not exercise Android
+ * Keystore encryption; that requires a device/instrumentation test.
  */
 class CustomConfigStoreCodecTest {
 
@@ -80,5 +80,33 @@ class CustomConfigStoreCodecTest {
         assertEquals(ConfigProtocol.OTHER, decoded?.configs?.single()?.protocol)
         assertEquals(ConfigFormat.URI, decoded?.configs?.single()?.format)
         assertEquals(ConfigSource.LINK, decoded?.configs?.single()?.source)
+    }
+
+    @Test
+    fun `version two subscriptions recover their group from linked configs`() {
+        val decoded = CustomConfigStore.decode(
+            """{
+                "v":2,
+                "groups":[{"id":"legacy-group","name":"Legacy"}],
+                "configs":[{
+                    "id":"legacy-config",
+                    "name":"Legacy server",
+                    "protocol":"VLESS",
+                    "format":"URI",
+                    "source":"LINK",
+                    "outbound":"{}",
+                    "groupId":"legacy-group",
+                    "subscriptionId":"legacy-subscription"
+                }],
+                "subscriptions":[{
+                    "id":"legacy-subscription",
+                    "name":"Legacy feed",
+                    "url":"https://subscriptions.example.invalid/legacy"
+                }]
+            }""",
+        )
+
+        assertNotNull(decoded)
+        assertEquals("legacy-group", decoded?.subscriptions?.single()?.groupId)
     }
 }
