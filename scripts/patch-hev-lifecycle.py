@@ -195,10 +195,6 @@ hev_socks5_tunnel_stop_generation (uint64_t generation)
 
 apply(tunnel, [
     (
-        "#include <stdint.h>\n",
-        "#include <stdint.h>\n",
-        "stdint include",
-    ) if False else (
         "static int run;\nstatic atomic_int tsync;\n",
         "static int run;\nstatic atomic_int tsync;\n\n"
         "/* Serialize stop against finalization and reject stale generations. */\n"
