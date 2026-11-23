@@ -6,7 +6,8 @@ package studio.cluvex.aether.core
  * hev MUST run inside the *same process* that owns the VpnService TUN file
  * descriptor (fds are per-process), and its event loop MUST run on a native
  * pthread — not a Java thread. TProxyStartService satisfies both: it returns
- * immediately after spawning hev's own native thread.
+ * once a native worker generation has been accepted, not when the tunnel is
+ * fully initialized. Native status remains authoritative until worker exit.
  *
  * See TProxyService.kt for the full root-cause history (custom-wrapper SIGSEGV
  * on ART-attached threads).
@@ -15,7 +16,7 @@ object HevTunnel {
     /** True if the native core is available to run. */
     fun isAvailable(): Boolean = TProxyService.available
 
-    /** Starts hev on its own native thread. No-op if already running. */
+    /** Starts hev on its own native thread. No-op if a generation is already accepted. */
     fun start(configPath: String, tunFd: Int) {
         if (!TProxyService.available) {
             val detail = TProxyService.loadFailure ?: "unknown loader error"
@@ -26,9 +27,8 @@ object HevTunnel {
             throw IllegalStateException("hev native library unavailable: $detail")
         }
         DiagnosticsLog.i("tunnel", "hev-socks5-tunnel starting on native thread (fd=$tunFd)")
-        // Upstream's TProxyStartService now returns whether the tunnel really
-        // started (bad YAML config, invalid fd, …). Surface a hard failure
-        // instead of pretending the tunnel is up and "connecting" forever.
+        // JNI confirms that a worker generation was accepted. Configuration and
+        // tunnel initialization happen asynchronously on that native worker;
         val started = TProxyService.TProxyStartService(configPath, tunFd)
         if (!started) {
             DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to start (config/fd rejected)")
