@@ -1,15 +1,25 @@
 diff --git a/src/hev-main.h b/src/hev-main.h
 --- a/src/hev-main.h
 +++ b/src/hev-main.h
-@@ -13,6 +13,12 @@
+@@ -10,6 +10,7 @@
+ #define __HEV_MAIN_H__
+ 
+ #include <stddef.h>
++#include <stdint.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -16,6 +17,14 @@
  extern "C" {
  #endif
  
 +typedef void (*HevSocks5TunnelReadyCallback) (void *user_data);
 +
 +int hev_socks5_tunnel_main_with_ready_callback (
-+    const char *config_path, int tun_fd,
++    const char *config_path, int tun_fd, uint64_t generation,
 +    HevSocks5TunnelReadyCallback ready_callback, void *user_data);
++
++void hev_socks5_tunnel_quit_generation (uint64_t generation);
 +
  /**
   * hev_socks5_tunnel_main:
@@ -17,16 +27,20 @@ diff --git a/src/hev-main.h b/src/hev-main.h
 diff --git a/src/hev-main.c b/src/hev-main.c
 --- a/src/hev-main.c
 +++ b/src/hev-main.c
-@@ -25,5 +25,7 @@
+@@ -25,7 +25,8 @@
  #include "hev-main.h"
  
  static int
 -hev_socks5_tunnel_main_inner (int tun_fd)
-+hev_socks5_tunnel_main_inner (int tun_fd,
++hev_socks5_tunnel_main_inner (int tun_fd, uint64_t generation,
 +                              HevSocks5TunnelReadyCallback ready_callback,
 +                              void *user_data)
  {
-@@ -76,6 +77,9 @@ hev_socks5_tunnel_main_inner (int tun_fd)
+@@ -67,14 +68,17 @@ hev_socks5_tunnel_main_inner (int tun_fd)
+     lwip_init ();
+ 
+-    res = hev_socks5_tunnel_init (tun_fd);
++    res = hev_socks5_tunnel_init (tun_fd, generation);
      if (res < 0)
          goto free_task_sys;
  
@@ -42,14 +56,15 @@ diff --git a/src/hev-main.c b/src/hev-main.c
  
 +EXPORT_SYMBOL int
 +hev_socks5_tunnel_main_with_ready_callback (
-+    const char *config_path, int tun_fd,
++    const char *config_path, int tun_fd, uint64_t generation,
 +    HevSocks5TunnelReadyCallback ready_callback, void *user_data)
 +{
 +    int res = hev_config_init_from_file (config_path);
 +    if (res < 0)
 +        return -1;
 +
-+    return hev_socks5_tunnel_main_inner (tun_fd, ready_callback, user_data);
++    return hev_socks5_tunnel_main_inner (tun_fd, generation,
++                                         ready_callback, user_data);
 +}
 +
  EXPORT_SYMBOL int
@@ -61,29 +76,59 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 -
 -    return hev_socks5_tunnel_main_inner (tun_fd);
 +    return hev_socks5_tunnel_main_with_ready_callback (config_path, tun_fd,
-+                                                       NULL, NULL);
++                                                       0, NULL, NULL);
  }
-@@ -118,5 +136,5 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
+@@ -118,5 +131,5 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
      if (res < 0)
          return -1;
  
 -    return hev_socks5_tunnel_main_inner (tun_fd);
-+    return hev_socks5_tunnel_main_inner (tun_fd, NULL, NULL);
++    return hev_socks5_tunnel_main_inner (tun_fd, 0, NULL, NULL);
  }
+@@ -136,6 +149,12 @@ hev_socks5_tunnel_quit (void)
+     hev_socks5_tunnel_stop ();
+ }
+ 
++EXPORT_SYMBOL void
++hev_socks5_tunnel_quit_generation (uint64_t generation)
++{
++    hev_socks5_tunnel_stop_generation (generation);
++}
++
+ #ifndef ENABLE_LIBRARY
+diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
+--- a/src/hev-socks5-tunnel.h
++++ b/src/hev-socks5-tunnel.h
+@@ -10,10 +10,13 @@
+ #define __HEV_SOCKS5_TUNNEL_H__
+ 
++#include <stdint.h>
+ #include "hev-list.h"
+ 
+-int hev_socks5_tunnel_init (int tun_fd);
++int hev_socks5_tunnel_init (int tun_fd, uint64_t generation);
+ void hev_socks5_tunnel_fini (void);
+ 
+ int hev_socks5_tunnel_run (void);
+ void hev_socks5_tunnel_stop (void);
++void hev_socks5_tunnel_stop_generation (uint64_t generation);
+ 
+ void hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
+                               size_t *rx_packets, size_t *rx_bytes);
 diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 --- a/src/hev-socks5-tunnel.c
 +++ b/src/hev-socks5-tunnel.c
-@@ -48,4 +48,26 @@ enum
+@@ -48,4 +48,27 @@ enum
  static int run;
  static atomic_int tsync;
  
 +/*
-+ * Serialize quit against tunnel finalization. tsync alone is not sufficient:
-+ * a late quit after fini clears SYNC_SEND can leave SYNC_STOP set for the next
-+ * invocation because tsync is process-global.
++ * Serialize quit against tunnel finalization. Generation checks prevent a
++ * delayed stop from an old bridge worker from reaching a newer invocation.
 + */
 +static atomic_flag lifecycle_gate = ATOMIC_FLAG_INIT;
 +static int lifecycle_active;
++static uint64_t lifecycle_generation;
 +
 +static void
 +lifecycle_lock (void)
@@ -100,39 +145,61 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +}
 +
  static int tun_fd = -1;
-@@ -770,5 +787,8 @@ hev_socks5_tunnel_init (int tun_fd)
+@@ -770,5 +793,9 @@ hev_socks5_tunnel_init (int tun_fd)
      hev_task_mutex_init (&mutex);
  
 +    lifecycle_lock ();
 +    lifecycle_active = 1;
++    lifecycle_generation = generation;
      atomic_fetch_or (&tsync, SYNC_SEND);
 +    lifecycle_unlock ();
  
      return 0;
-@@ -783,4 +803,8 @@ hev_socks5_tunnel_fini (void)
+@@ -783,4 +810,9 @@ hev_socks5_tunnel_fini (void)
  {
      LOG_D ("socks5 tunnel fini");
  
 +    lifecycle_lock ();
 +    lifecycle_active = 0;
++    lifecycle_generation = 0;
 +    lifecycle_unlock ();
 +
  retry:
-@@ -841,5 +864,11 @@ hev_socks5_tunnel_stop (void)
+@@ -841,24 +873,43 @@ hev_socks5_tunnel_stop (void)
+-void
+-hev_socks5_tunnel_stop (void)
++static void
++hev_socks5_tunnel_stop_internal (uint64_t generation, int check_generation)
  {
      int res;
  
      LOG_D ("socks5 tunnel stop");
+ 
 +    lifecycle_lock ();
-+    if (!lifecycle_active) {
++    if (!lifecycle_active ||
++        (check_generation && lifecycle_generation != generation)) {
 +        lifecycle_unlock ();
 +        return;
 +    }
 +
  retry:
-@@ -857,4 +886,5 @@ retry:
+     res = atomic_fetch_or (&tsync, SYNC_WAIT);
+     if (res & SYNC_WAIT) {
+@@ -857,4 +908,18 @@ retry:
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
 +    lifecycle_unlock ();
++}
++
++void
++hev_socks5_tunnel_stop (void)
++{
++    hev_socks5_tunnel_stop_internal (0, 0);
++}
++
++void
++hev_socks5_tunnel_stop_generation (uint64_t generation)
++{
++    hev_socks5_tunnel_stop_internal (generation, 1);
  }
