@@ -12,9 +12,6 @@ package studio.cluvex.aether.core
  * on ART-attached threads).
  */
 object HevTunnel {
-    @Volatile
-    private var running = false
-
     /** True if the native core is available to run. */
     fun isAvailable(): Boolean = TProxyService.available
 
@@ -28,7 +25,6 @@ object HevTunnel {
             )
             throw IllegalStateException("hev native library unavailable: $detail")
         }
-        if (running) return
         DiagnosticsLog.i("tunnel", "hev-socks5-tunnel starting on native thread (fd=$tunFd)")
         // Upstream's TProxyStartService now returns whether the tunnel really
         // started (bad YAML config, invalid fd, …). Surface a hard failure
@@ -38,10 +34,9 @@ object HevTunnel {
             DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to start (config/fd rejected)")
             throw IllegalStateException("hev-socks5-tunnel failed to start")
         }
-        running = true
     }
 
-    fun isAlive(): Boolean = running
+    fun isAlive(): Boolean = TProxyService.available && TProxyService.TProxyIsActive()
 
     /**
      * Raw cumulative counters from hev's JNI, or null when the core isn't
@@ -49,7 +44,7 @@ object HevTunnel {
      * Prefer [traffic] over indexing this directly — it fixes the direction.
      */
     fun stats(): LongArray? {
-        if (!TProxyService.available || !running) return null
+        if (!TProxyService.available || !TProxyService.TProxyIsActive()) return null
         return runCatching { TProxyService.TProxyGetStats() }.getOrNull()
     }
 
@@ -91,13 +86,11 @@ object HevTunnel {
     /** Requests hev to quit. Safe to call repeatedly. */
     fun stop() {
         if (!TProxyService.available) return
-        if (!running) return
         try {
             TProxyService.TProxyStopService()
             DiagnosticsLog.i("tunnel", "hev-socks5-tunnel stop requested")
         } catch (t: Throwable) {
             DiagnosticsLog.w("tunnel", "TProxyStopService failed: ${t.message}")
         }
-        running = false
     }
 }
