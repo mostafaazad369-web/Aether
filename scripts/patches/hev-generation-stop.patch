@@ -100,12 +100,12 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +}
 +
  static int tun_fd = -1;
-@@ -770,5 +787,8 @@ hev_socks5_tunnel_init (int tun_fd)
+@@ -770,5 +787,9 @@ hev_socks5_tunnel_init (int tun_fd)
      hev_task_mutex_init (&mutex);
  
-     atomic_fetch_or (&tsync, SYNC_SEND);
 +    lifecycle_lock ();
 +    lifecycle_active = 1;
+     atomic_fetch_or (&tsync, SYNC_SEND);
 +    lifecycle_unlock ();
  
      return 0;
