@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <android/log.h>
 
 extern int hev_socks5_tunnel_main_with_ready_callback(
@@ -89,6 +90,8 @@ tunnel_thread(void *data)
         hev_ready_callback, args);
     LOGI("HEV worker returned (res=%d)", res);
 
+    if (args->tun_fd >= 0)
+        close(args->tun_fd);
     free(args->config_path);
     free(args);
 
@@ -123,24 +126,30 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
     if (args != NULL)
         args->config_path = strdup(path);
     if (args != NULL)
-        args->tun_fd = (int)tun_fd;
+        args->tun_fd = dup((int)tun_fd);
     (*env)->ReleaseStringUTFChars(env, config_path, path);
 
-    if (args == NULL || args->config_path == NULL) {
-        if (args != NULL)
+    if (args == NULL || args->config_path == NULL || args->tun_fd < 0) {
+        if (args != NULL) {
+            if (args->tun_fd >= 0)
+                close(args->tun_fd);
+            free(args->config_path);
             free(args);
+        }
         return JNI_FALSE;
     }
 
     pthread_mutex_lock(&lock);
     if (state == TUNNEL_STARTING || state == TUNNEL_RUNNING) {
         pthread_mutex_unlock(&lock);
+        close(args->tun_fd);
         free(args->config_path);
         free(args);
         return JNI_TRUE; /* this generation has already been accepted */
     }
     if (state == TUNNEL_STOP_REQUESTED) {
         pthread_mutex_unlock(&lock);
+        close(args->tun_fd);
         free(args->config_path);
         free(args);
         return JNI_FALSE; /* never report success for a generation draining */
@@ -171,6 +180,7 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
 
     if (rc != 0) {
         LOGE("could not create HEV worker: %d", rc);
+        close(args->tun_fd);
         free(args->config_path);
         free(args);
         return JNI_FALSE;
