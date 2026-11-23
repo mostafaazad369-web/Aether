@@ -43,7 +43,6 @@ typedef enum {
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static TunnelState state = TUNNEL_IDLE;
-static bool config_ready;
 static bool stop_dispatched;
 static uint64_t generation_counter;
 static uint64_t active_generation;
@@ -66,7 +65,6 @@ hev_ready_callback(void *user_data)
         pthread_mutex_unlock(&lock);
         return;
     }
-    config_ready = true;
     if (state == TUNNEL_STARTING) {
         state = TUNNEL_RUNNING;
     } else if (state == TUNNEL_STOP_REQUESTED && !stop_dispatched) {
@@ -98,7 +96,6 @@ tunnel_thread(void *data)
     pthread_mutex_lock(&lock);
     state = TUNNEL_EXITED;
     active_generation = 0;
-    config_ready = false;
     stop_dispatched = false;
     pthread_mutex_unlock(&lock);
     return NULL;
