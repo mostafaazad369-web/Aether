@@ -145,10 +145,15 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +}
 +
  static int tun_fd = -1;
-@@ -770,6 +793,10 @@ hev_socks5_tunnel_init (int tun_fd)
--int hev_socks5_tunnel_init (int tun_fd)
-+int hev_socks5_tunnel_init (int tun_fd, uint64_t generation)
-     hev_task_mutex_init (&mutex);
+@@ -770,10 +793,14 @@
+ int
+-hev_socks5_tunnel_init (int tun_fd)
++hev_socks5_tunnel_init (int tun_fd, uint64_t generation)
+ {
+     int res;
+ 
+     LOG_D ("socks5 tunnel init");
+
  
 +    lifecycle_lock ();
 +    lifecycle_active = 1;
