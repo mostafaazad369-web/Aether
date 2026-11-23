@@ -275,3 +275,25 @@ The branch now contains an implementation of the HEV-specific start/stop boundar
 This implementation addresses the identified HEV bridge races with three coordinated safeguards: Aether defers stop until successful tunnel initialization, every stop carries an invocation token checked inside HEV, and HEV serializes token validation with finalization. The duplicated TUN descriptor also prevents the caller's close from invalidating a worker that is still draining. The native state is authoritative; a successful JNI start means the generation was accepted, not that config parsing or tunnel initialization has already succeeded. A later worker error is represented by its transition to EXITED, not by a synchronous JNI start failure.
 
 No Android NDK build, host native concurrency harness, device test, Gradle test, or instrumentation test has been run in this environment. In particular, the pinned-source patch has been authored and wired into the fetch script but has not yet been applied by an actual native build. Treat this as implementation committed but **not yet build-verified**. Required next checks are: run `scripts/fetch-natives.sh`, verify `git apply --check` and the patched HEV symbols, build all three configured ABIs with `scripts/build-natives.sh hev`, then exercise config failure followed by restart, stop during init, normal stop followed immediately by restart, a delayed generation-N quit after generation N+1 becomes active (which must be ignored), invalid TUN fd duplication, and closing the caller's original TUN fd while the worker-owned duplicate remains valid until HEV exits. The broader Service/process-level teardown concerns earlier in this document remain unresolved.
+
+
+
+## Verification update — 2026-11-23
+
+This section supersedes the implementation-path and verification statements immediately above where they refer to the old patch-file workflow or say that the native implementation has not yet been built.
+
+### Current implementation path
+
+- The obsolete `scripts/patches/hev-generation-stop.patch` has been removed.
+- `scripts/fetch-natives.sh` now invokes `scripts/patch-hev-lifecycle.py` against the pinned HEV source. The patcher uses guarded exact replacements and is idempotent: it skips an already-applied replacement and fails closed if the expected upstream source does not match.
+- The callback API and generation-specific stop API described above are supplied by this patcher, not by the deleted diff patch.
+
+### Verified in GitHub Actions
+
+Workflow run [45134832287](https://github.com/mostafaazad369-web/Aether/actions/runs/45134832287) completed successfully for commit `4a6561a`. It fetched and patched the pinned HEV source, built HEV and the JNI bridge for `arm64-v8a`, `armeabi-v7a`, and `x86_64`, passed the native symbol/link checks, and compiled the Android Kotlin sources.
+
+A follow-up workflow, [45138093802](https://github.com/mostafaazad369-web/Aether/actions/runs/45138093802), adds `:app:testDebugUnitTest` after Kotlin compilation. At the time of this update, native fetch/patch and all three ABI builds have passed in that run; Kotlin compilation is still in progress and the JVM unit-test step has not started. Do not treat the follow-up unit-test task as passed until the run reports success.
+
+### Remaining unverified coverage
+
+The successful native build proves compilation and required exported symbols, not live tunnel correctness or race freedom. A host-side deterministic native concurrency harness and device-level lifecycle tests are still outstanding. In particular, test config failure followed by restart, stop during initialization, immediate restart after normal stop, stale generation-N stop after generation N+1 starts, invalid TUN descriptor duplication, and closing the caller's original TUN descriptor while the worker-owned duplicate remains live. The broader process-level Service teardown concerns in this document also remain open.
