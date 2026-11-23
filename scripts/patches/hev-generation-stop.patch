@@ -41,7 +41,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 +        ready_callback (user_data);
 +
      hev_socks5_tunnel_run ();
-@@ -94,9 +100,19 @@
+@@ -94,9 +99,19 @@
  EXPORT_SYMBOL int
  hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
  {
