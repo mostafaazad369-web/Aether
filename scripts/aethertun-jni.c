@@ -8,14 +8,15 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <android/log.h>
 
 extern int hev_socks5_tunnel_main_with_ready_callback(
-    const char *config_path, int tun_fd,
+    const char *config_path, int tun_fd, uint64_t generation,
     void (*ready_callback)(void *), void *user_data);
-extern void hev_socks5_tunnel_quit(void);
+extern void hev_socks5_tunnel_quit_generation(uint64_t generation);
 extern void hev_socks5_tunnel_stats(size_t *tx_packets, size_t *tx_bytes,
                                     size_t *rx_packets, size_t *rx_bytes);
 
@@ -44,21 +45,28 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static TunnelState state = TUNNEL_IDLE;
 static bool config_ready;
 static bool stop_dispatched;
+static uint64_t generation_counter;
+static uint64_t active_generation;
 
 typedef struct {
     char *config_path;
     int tun_fd;
+    uint64_t generation;
 } StartArgs;
 
 /* Called by the patched HEV main path only after tunnel init succeeded. */
 static void
-hev_ready_callback(void *unused)
+hev_ready_callback(void *user_data)
 {
+    StartArgs *args = (StartArgs *)user_data;
     bool dispatch_stop = false;
-    (void)unused;
 
     pthread_mutex_lock(&lock);
     config_ready = true;
+    if (active_generation != args->generation) {
+        pthread_mutex_unlock(&lock);
+        return;
+    }
     if (state == TUNNEL_STARTING) {
         state = TUNNEL_RUNNING;
     } else if (state == TUNNEL_STOP_REQUESTED && !stop_dispatched) {
@@ -68,7 +76,7 @@ hev_ready_callback(void *unused)
     pthread_mutex_unlock(&lock);
 
     if (dispatch_stop)
-        hev_socks5_tunnel_quit();
+        hev_socks5_tunnel_quit_generation(args->generation);
 }
 
 static void *
@@ -79,7 +87,8 @@ tunnel_thread(void *data)
 
     LOGI("HEV worker starting (fd=%d)", args->tun_fd);
     res = hev_socks5_tunnel_main_with_ready_callback(
-        args->config_path, args->tun_fd, hev_ready_callback, NULL);
+        args->config_path, args->tun_fd, args->generation,
+        hev_ready_callback, args);
     LOGI("HEV worker returned (res=%d)", res);
 
     free(args->config_path);
@@ -88,6 +97,7 @@ tunnel_thread(void *data)
     /* HEV's own lifecycle gate is already inactive when main returns. */
     pthread_mutex_lock(&lock);
     state = TUNNEL_EXITED;
+    active_generation = 0;
     config_ready = false;
     stop_dispatched = false;
     pthread_mutex_unlock(&lock);
@@ -139,6 +149,10 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
         return JNI_FALSE; /* never report success for a generation draining */
     }
 
+    if (++generation_counter == 0)
+        ++generation_counter;
+    args->generation = generation_counter;
+    active_generation = args->generation;
     state = TUNNEL_STARTING;
     config_ready = false;
     stop_dispatched = false;
@@ -177,6 +191,7 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStopService(
     if (state == TUNNEL_STARTING) {
         /* Defer quit until HEV confirms successful tunnel initialization. */
         state = TUNNEL_STOP_REQUESTED;
+        stop_generation = active_generation;
     } else if (state == TUNNEL_RUNNING) {
         state = TUNNEL_STOP_REQUESTED;
         stop_dispatched = true;
