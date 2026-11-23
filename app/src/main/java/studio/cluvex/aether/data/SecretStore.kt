@@ -23,9 +23,11 @@ import javax.crypto.spec.GCMParameterSpec
  * readable with a file manager on a rooted device, and survives in plaintext
  * after the user clears the field.
  *
- * So the value is sealed with an AES-256-GCM key generated inside the Android
- * Keystore and marked non-exportable: the raw key never enters the app's
- * address space, and the ciphertext alone is useless on another device.
+ * So the value is sealed with an AES-256-GCM key managed by Android Keystore
+ * and marked non-exportable. Android may use secure hardware for the key, but
+ * hardware backing is device-dependent. This protects ciphertext at rest; it
+ * does not protect plaintext while in use or guarantee safety on a rooted or
+ * otherwise compromised running device.
  *
  * Layout: Base64( iv(12) || ciphertext||tag ).
  */
