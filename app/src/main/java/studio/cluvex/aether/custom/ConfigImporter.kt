@@ -15,7 +15,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
@@ -155,7 +154,7 @@ object ConfigImporter {
             } catch (e: ConfigImportException) {
                 throw e
             } catch (e: Exception) {
-                throw ConfigImportException("the address could not be downloaded (\${e.javaClass.simpleName})")
+                throw ConfigImportException("the address could not be downloaded (${e.javaClass.simpleName})")
             } finally {
                 conn.disconnect()
             }
