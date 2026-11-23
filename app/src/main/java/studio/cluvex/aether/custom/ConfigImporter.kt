@@ -114,6 +114,14 @@ object ConfigImporter {
         }
     }
 
+    /** Enforces the same redirect budget used by the live downloader. */
+    internal fun validateSubscriptionRedirect(url: URL, redirectsFollowed: Int) {
+        if (redirectsFollowed > MAX_REDIRECTS) {
+            throw ConfigImportException("subscription address redirected too many times")
+        }
+        validateSubscriptionUrl(url)
+    }
+
     private fun download(url: String): ByteArray {
         // Subscription URLs can contain credentials. Never send them over cleartext,
         // and never let an HTTPS endpoint downgrade the request through a redirect.
@@ -122,7 +130,7 @@ object ConfigImporter {
         }
         val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
         for (redirect in 0..MAX_REDIRECTS) {
-            validateSubscriptionUrl(target)
+            validateSubscriptionRedirect(target, redirect)
             val opened = if (port in 1..65535) {
                 target.openConnection(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
             } else {
@@ -138,15 +146,12 @@ object ConfigImporter {
                 conn.setRequestProperty("Accept", "*/*")
                 val code = conn.responseCode
                 if (code in REDIRECT_CODES) {
-                    if (redirect == MAX_REDIRECTS) {
-                        throw ConfigImportException("subscription address redirected too many times")
-                    }
                     val location = conn.getHeaderField("Location")
                         ?: throw ConfigImportException("subscription redirect has no destination")
                     val next = runCatching { URL(target, location) }.getOrElse {
                         throw ConfigImportException("subscription redirect address is invalid")
                     }
-                    validateSubscriptionUrl(next)
+                    validateSubscriptionRedirect(next, redirect + 1)
                     target = next
                     continue
                 }
