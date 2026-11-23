@@ -1,6 +1,6 @@
 # VPN service teardown: lifecycle findings and safe refactor boundary
 
-Status: investigation only; no runtime teardown behavior is changed by this document.
+Status: a first HEV lifecycle implementation slice is committed; native build and runtime verification remain outstanding.
 
 ## Scope inspected
 
@@ -254,3 +254,24 @@ Required deterministic regression tests now include:
 - verify every exit path clears or retires only its own invocation state.
 
 Implementation remains deferred. No runtime JNI, Kotlin, or upstream source behavior was changed by this finding. The earlier config-success callback requirement remains necessary for stop-during-startup, but it is only one part of the complete protocol.
+
+
+## Generation-aware HEV bridge implementation slice (2026-11-23)
+
+The branch now contains an implementation of the HEV-specific start/stop boundary described above. This is a narrow resource-lifecycle change, not the broader process-level Service teardown owner.
+
+### What changed
+
+- `scripts/patches/hev-generation-stop.patch` adds an exported `hev_socks5_tunnel_main_with_ready_callback()` entry point to the pinned HEV source. The callback runs only after configuration parsing **and** `hev_socks5_tunnel_init()` have succeeded. A stop requested while configuration or tunnel initialization is in progress remains pending in Aether's bridge; a failed parse/init therefore cannot leave a stale HEV stop bit.
+- The same pinned patch adds a small atomic lifecycle gate around HEV's stop/finalization boundary. The gate is activated only after tunnel initialization succeeds. `hev_socks5_tunnel_fini()` retires it before clearing the process-global sync bits, and `hev_socks5_tunnel_stop()` becomes a no-op once that invocation is retired. This closes the late-stop interval between HEV finalization and the JNI worker's completion publication. The legacy public main/quit API also passes through this gate.
+- `scripts/fetch-natives.sh` applies the patch only after checking it applies cleanly to the pinned HEV checkout. A source drift or missing patch fails the fetch/build path rather than silently compiling unreviewed upstream code.
+- `scripts/aethertun-jni.c` now tracks `IDLE`, `STARTING`, `RUNNING`, `STOP_REQUESTED`, and `EXITED`. Stop during startup is deferred until the HEV-ready callback; duplicate starts do not create a second worker; starts are rejected while a generation is draining; and a new generation is accepted only after the prior worker has returned from HEV and published EXITED.
+- The bridge worker remains detached, but frees its per-generation arguments before publishing EXITED. After that publication it performs no further HEV or shared lifecycle work, so a new generation cannot overlap the prior HEV invocation.
+- `TProxyIsActive()` exposes native state to Kotlin. `HevTunnel` no longer maintains its own competing `running` Boolean, which previously could diverge from the native worker after an asynchronous stop.
+- `scripts/build-natives.sh` now requires the patched HEV callback symbol and the new JNI status symbol at link/symbol-verification time.
+
+### Important boundaries and verification status
+
+This change closes the identified HEV bridge race by combining two gates: Aether defers stop until successful tunnel initialization, and HEV serializes quit against its own finalization. The native state is authoritative; a successful JNI start means the generation was accepted, not that config parsing or tunnel initialization has already succeeded. A later worker error is represented by its transition to EXITED, not by a synchronous JNI start failure.
+
+No Android NDK build, host native concurrency harness, device test, Gradle test, or instrumentation test has been run in this environment. In particular, the pinned-source patch has been authored and wired into the fetch script but has not yet been applied by an actual native build. Treat this as implementation committed but **not yet build-verified**. Required next checks are: run `scripts/fetch-natives.sh`, verify `git apply --check` and the patched HEV symbols, build all three configured ABIs with `scripts/build-natives.sh hev`, then exercise config failure followed by restart, stop during init, normal stop followed immediately by restart, and late stop after HEV finalization. The broader Service/process-level teardown concerns earlier in this document remain unresolved.
