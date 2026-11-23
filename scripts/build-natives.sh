@@ -186,7 +186,7 @@ build_hev() {
     # root-cause note below. Only the C entry points matter, and those have
     # been stable across hev releases for years.
     dynsyms="$("${NDK_TOOLCHAIN}/llvm-nm" --dynamic --defined-only "${out}" 2>/dev/null || true)"
-    for sym in hev_socks5_tunnel_main hev_socks5_tunnel_main_with_ready_callback hev_socks5_tunnel_quit hev_socks5_tunnel_stats; do
+    for sym in hev_socks5_tunnel_main hev_socks5_tunnel_main_with_ready_callback hev_socks5_tunnel_quit hev_socks5_tunnel_quit_generation hev_socks5_tunnel_stats; do
       if ! grep -qw "${sym}" <<<"${dynsyms}"; then
         echo "ERROR: [${abi}] libhev-socks5-tunnel.so lacks ${sym}." >&2
         exit 1
@@ -272,7 +272,7 @@ build_hev() {
           ;;
       esac
     done <<< "${needed}"
-    echo "    [${abi}] libhev-socks5-tunnel.so verified: patched lifecycle C API (main/ready/quit/stats) OK"
+    echo "    [${abi}] libhev-socks5-tunnel.so verified: patched lifecycle C API (main/ready/generation-quit/stats) OK"
     "${NDK_TOOLCHAIN}/llvm-readelf" -d "${out}" 2>/dev/null | grep NEEDED || true
   done
 }
