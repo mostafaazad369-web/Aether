@@ -83,7 +83,7 @@ object TProxyService {
     /**
      * Starts the tunnel event loop on a native pthread created by the bridge.
      * Returns true when a generation was accepted (or is already starting/running),
-     * false when spawning failed.
+     * false when the TUN descriptor could not be duplicated or spawning failed.
      */
     @JvmStatic
     @Suppress("FunctionName")
