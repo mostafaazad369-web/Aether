@@ -241,8 +241,8 @@ build_hev() {
       JNI_OnLoad \
       Java_studio_cluvex_aether_core_TProxyService_TProxyStartService \
       Java_studio_cluvex_aether_core_TProxyService_TProxyStopService \
-      Java_studio_cluvex_aether_core_TProxyService_TProxyGetStats \\\n      Java_studio_cluvex_aether_core_TProxyService_TProxyIsActive; do
-      if ! grep -qw "${sym}" <<<"${bridgesyms}"; then
+      Java_studio_cluvex_aether_core_TProxyService_TProxyGetStats \
+      Java_studio_cluvex_aether_core_TProxyService_TProxyIsActive; do
         echo "ERROR: [${abi}] libaethertun.so lacks ${sym} — Kotlin externals would not resolve." >&2
         exit 1
       fi
