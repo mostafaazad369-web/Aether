@@ -76,7 +76,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 --- a/src/hev-socks5-tunnel.h
 +++ b/src/hev-socks5-tunnel.h
-@@ -13,7 +13,9 @@
+@@ -13,11 +13,13 @@
  
 +#include <stdint.h>
  #include "hev-list.h"
@@ -94,7 +94,7 @@ diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 --- a/src/hev-socks5-tunnel.c
 +++ b/src/hev-socks5-tunnel.c
-@@ -58,2 +58,24 @@
+@@ -58,4 +58,26 @@
  static int run;
  static atomic_int tsync;
  
@@ -168,7 +168,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
      if (res & SYNC_WAIT) {
          usleep (500);
          goto retry;
-@@ -919,4 +957,17 @@
+@@ -919,3 +957,17 @@
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
