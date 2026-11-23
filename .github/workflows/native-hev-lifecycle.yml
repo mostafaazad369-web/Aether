@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   hev-native:
-    name: Patch, compile HEV and JNI bridge
+    name: Patch, compile HEV/JNI and run JVM tests
     runs-on: ubuntu-latest
     env:
       NDK_VERSION: "26.3.11579264"
@@ -57,3 +57,6 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
+
+      - name: Run Android JVM unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
