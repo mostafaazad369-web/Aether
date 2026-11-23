@@ -144,25 +144,16 @@ Java_studio_cluvex_aether_core_TProxyService_TProxyStartService(
     stop_dispatched = false;
 
     rc = pthread_attr_init(&attr);
-    if (rc == 0)
+    if (rc == 0) {
         rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (rc == 0)
-        rc = pthread_create(&thread, &attr, tunnel_thread, args);
-    if (rc == 0 || rc != 0) {
-        /* attr_destroy is valid only after successful attr_init. */
-    }
-    if (rc == 0 || rc != 0) {
-        /* Keep the failure path explicit; no joinable worker is retained. */
+        if (rc == 0)
+            rc = pthread_create(&thread, &attr, tunnel_thread, args);
+        pthread_attr_destroy(&attr);
     }
     if (rc != 0) {
         state = TUNNEL_IDLE;
         config_ready = false;
         stop_dispatched = false;
-    }
-    if (rc == 0)
-        pthread_attr_destroy(&attr);
-    else if (rc != 0) {
-        /* pthread_attr_init may itself have failed. */
     }
     pthread_mutex_unlock(&lock);
 
