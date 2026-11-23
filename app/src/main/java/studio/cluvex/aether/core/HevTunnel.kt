@@ -28,10 +28,10 @@ object HevTunnel {
         }
         DiagnosticsLog.i("tunnel", "hev-socks5-tunnel starting on native thread (fd=$tunFd)")
         // JNI confirms that a worker generation was accepted. Configuration and
-        // tunnel initialization happen asynchronously on that native worker;
+        // tunnel initialization happen asynchronously on that native worker.
         val started = TProxyService.TProxyStartService(configPath, tunFd)
         if (!started) {
-            DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to start (config/fd rejected)")
+            DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to accept a start request (worker unavailable or draining)")
             throw IllegalStateException("hev-socks5-tunnel failed to start")
         }
     }
