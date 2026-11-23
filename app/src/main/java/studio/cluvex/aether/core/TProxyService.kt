@@ -82,7 +82,7 @@ object TProxyService {
 
     /**
      * Starts the tunnel event loop on a native pthread created by the bridge.
-     * Returns true when the tunnel thread was spawned (or is already running),
+     * Returns true when a generation was accepted (or is already starting/running),
      * false when spawning failed.
      */
     @JvmStatic
@@ -92,6 +92,11 @@ object TProxyService {
     @JvmStatic
     @Suppress("FunctionName")
     external fun TProxyStopService()
+
+    /** True while a native generation is starting, running, or draining. */
+    @JvmStatic
+    @Suppress("FunctionName")
+    external fun TProxyIsActive(): Boolean
 
     /** [tx_packets, tx_bytes, rx_packets, rx_bytes] from hev's stats API. */
     @JvmStatic
