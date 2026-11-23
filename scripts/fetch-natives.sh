@@ -52,18 +52,15 @@ clone_repo() {
   git -C "${dir}" checkout --detach FETCH_HEAD
   git -C "${dir}" submodule update --init --recursive
   if [ "${dir}" = "${HEV_DIR}" ]; then
-    local hev_patch="${SCRIPT_DIR}/patches/hev-generation-stop.patch"
-    [ -f "${hev_patch}" ] || { echo "ERROR: required HEV lifecycle patch missing: ${hev_patch}" >&2; exit 1; }
-    git -C "${dir}" apply --check "${hev_patch}" || {
-      echo "ERROR: HEV lifecycle patch does not apply cleanly to pinned source; refusing an unreviewed native build." >&2
-      exit 1
+    local hev_patcher="${SCRIPT_DIR}/patch-hev-lifecycle.py"
+    [ -f "${hev_patcher}" ] || { echo "ERROR: required HEV lifecycle patcher missing: ${hev_patcher}" >&2; exit 1; }
+    python3 "${hev_patcher}" "${dir}/src"
+    grep -q "hev_socks5_tunnel_main_with_ready_callback" "${dir}/src/hev-main.c" && \
+      grep -q "hev_socks5_tunnel_quit_generation" "${dir}/src/hev-main.c" && \
+      grep -q "hev_socks5_tunnel_stop_generation" "${dir}/src/hev-socks5-tunnel.c" || {
+      echo "ERROR: HEV generation-safe lifecycle API missing after patch." >&2; exit 1;
     }
-    git -C "${dir}" apply "${hev_patch}"
-    grep -q "hev_socks5_tunnel_main_with_ready_callback" "${dir}/src/hev-main.c" && \\
-      grep -q "hev_socks5_tunnel_quit_generation" "${dir}/src/hev-main.c" || {
-      echo "ERROR: HEV ready-callback API missing after patch." >&2; exit 1;
-    }
-    echo "   applied Aether generation-safe HEV lifecycle patch"
+    echo "   applied Aether generation-safe HEV lifecycle extension"
   fi
   echo "   cloned ${url} @ $(git -C "${dir}" rev-parse HEAD)"
 }
