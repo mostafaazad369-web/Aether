@@ -27,7 +27,7 @@ diff --git a/src/hev-main.h b/src/hev-main.h
 diff --git a/src/hev-main.c b/src/hev-main.c
 --- a/src/hev-main.c
 +++ b/src/hev-main.c
-@@ -25,7 +25,8 @@
+@@ -25,5 +25,7 @@
  #include "hev-main.h"
  
  static int
@@ -36,7 +36,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 +                              HevSocks5TunnelReadyCallback ready_callback,
 +                              void *user_data)
  {
-@@ -67,14 +68,17 @@ hev_socks5_tunnel_main_inner (int tun_fd)
+@@ -67,9 +68,12 @@ hev_socks5_tunnel_main_inner (int tun_fd)
      lwip_init ();
  
 -    res = hev_socks5_tunnel_init (tun_fd);
@@ -50,7 +50,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
      hev_socks5_tunnel_run ();
  
      hev_socks5_tunnel_fini ();
-@@ -99,12 +103,21 @@ exit:
+@@ -99,12 +103,22 @@ exit:
      return res;
  }
  
@@ -85,7 +85,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 -    return hev_socks5_tunnel_main_inner (tun_fd);
 +    return hev_socks5_tunnel_main_inner (tun_fd, 0, NULL, NULL);
  }
-@@ -136,6 +149,12 @@ hev_socks5_tunnel_quit (void)
+@@ -136,4 +149,10 @@ hev_socks5_tunnel_quit (void)
      hev_socks5_tunnel_stop ();
  }
  
@@ -99,7 +99,7 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 --- a/src/hev-socks5-tunnel.h
 +++ b/src/hev-socks5-tunnel.h
-@@ -10,10 +10,13 @@
+@@ -10,12 +10,14 @@
  #define __HEV_SOCKS5_TUNNEL_H__
  
 +#include <stdint.h>
@@ -118,7 +118,7 @@ diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 --- a/src/hev-socks5-tunnel.c
 +++ b/src/hev-socks5-tunnel.c
-@@ -48,4 +48,27 @@ enum
+@@ -48,4 +48,26 @@ enum
  static int run;
  static atomic_int tsync;
  
@@ -145,7 +145,9 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +}
 +
  static int tun_fd = -1;
-@@ -770,5 +793,9 @@ hev_socks5_tunnel_init (int tun_fd)
+@@ -770,6 +793,10 @@ hev_socks5_tunnel_init (int tun_fd)
+-int hev_socks5_tunnel_init (int tun_fd)
++int hev_socks5_tunnel_init (int tun_fd, uint64_t generation)
      hev_task_mutex_init (&mutex);
  
 +    lifecycle_lock ();
@@ -165,7 +167,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +    lifecycle_unlock ();
 +
  retry:
-@@ -841,24 +873,43 @@ hev_socks5_tunnel_stop (void)
+@@ -841,10 +873,17 @@ hev_socks5_tunnel_stop (void)
 -void
 -hev_socks5_tunnel_stop (void)
 +static void
@@ -185,7 +187,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
  retry:
      res = atomic_fetch_or (&tsync, SYNC_WAIT);
      if (res & SYNC_WAIT) {
-@@ -857,4 +908,18 @@ retry:
+@@ -857,4 +908,17 @@ retry:
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
