@@ -225,3 +225,32 @@ The native bridge is compiled directly from `scripts/aethertun-jni.c` by `script
 Before shipping a runtime lifecycle patch, add a host-side test harness for the bridge state machine using injected fake HEV entry points, or an equivalent native test target. It should deterministically cover: concurrent duplicate start, stop before worker entry, stop while HEV startup is in progress, stop after event-loop entry, main returning with an error, pthread creation failure, repeated stop, and restart attempted before prior completion. Then build the Android bridge for all three configured ABIs and run service-level lifecycle tests. None of those executions has been performed as part of this documentation correction.
 
 No runtime JNI behavior was changed in this step. The previous claim that a separate upstream readiness hook is mandatory is superseded by this source-level finding; the required native fix remains generation-aware completion and serialized start/stop.
+
+
+
+### Stop dispatch racing native-main return (2026-11-23 follow-up)
+
+A further source-level race means that a config-success callback plus a bridge condition variable is **not by itself** a complete fix.
+
+The bridge's worker currently calls `hev_socks5_tunnel_main()`, then (only after that call returns) acquires the bridge mutex and publishes its completion state. A concurrent JNI stop can acquire the bridge mutex in the interval after HEV has returned but before the worker publishes EXITED. If the bridge still considers the generation active, it can call the process-global `hev_socks5_tunnel_quit()` during that interval.
+
+This matters in the pinned HEV implementation:
+
+- The normal event-loop stop path consumes `SYNC_SENT`, and `hev_socks5_tunnel_fini()` clears `SYNC_SEND | SYNC_SENT`.
+- After the main path has completed, a late `hev_socks5_tunnel_stop()` can observe that `SYNC_SEND` is no longer set and record `SYNC_STOP`.
+- That late bit is process-global. A subsequent successful invocation reaches `hev_socks5_tunnel_run()`, which consumes `SYNC_STOP` and returns without starting its event loop.
+
+So “worker has not yet published EXITED” is not equivalent to “HEV can still safely receive quit”. There is a small but real post-return/pre-publication interval, and an ordinary bridge mutex cannot close it: the worker cannot publish the return until the HEV call has already returned.
+
+The native design must make stop generation-scoped at the HEV boundary, rather than relying solely on the legacy process-global quit entry point. Viable implementation directions include a pinned upstream API that accepts a per-invocation cancellation context/token and only signals that invocation while it is active, or an equivalent upstream lifecycle gate whose inactive transition is performed inside the HEV main path after all tunnel/task/logger finalization and is synchronized with stop dispatch. The exact placement and lock ordering must be reviewed against every early-return and initialization-failure path. Merely adding a callback after config parsing is insufficient; merely setting a bridge Boolean immediately after the C function returns is also insufficient.
+
+The bridge must additionally prevent a previous generation's delayed stop dispatch from reaching a newer generation. A generation number stored only in the JNI bridge cannot make the legacy no-argument `hev_socks5_tunnel_quit()` generation-aware; the upstream side must participate in validating the target invocation.
+
+Required deterministic regression tests now include:
+- pause the fake/native main function immediately after its logical finalization but before the bridge publishes EXITED; race stop at that point and prove it cannot poison the next generation;
+- race a delayed stop dispatcher from generation N against startup of generation N+1 and prove N+1 receives no stale stop;
+- exercise config-parse failure followed by a valid invocation;
+- exercise normal event-loop shutdown followed immediately by restart;
+- verify every exit path clears or retires only its own invocation state.
+
+Implementation remains deferred. No runtime JNI, Kotlin, or upstream source behavior was changed by this finding. The earlier config-success callback requirement remains necessary for stop-during-startup, but it is only one part of the complete protocol.
