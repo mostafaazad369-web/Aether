@@ -69,14 +69,14 @@ diff --git a/src/hev-main.c b/src/hev-main.c
 +    return hev_socks5_tunnel_main_inner (tun_fd, generation,
 +                                         ready_callback, user_data);
 +}
-@@ -118,5 +133,5 @@
+@@ -107,5 +122,5 @@
      if (res < 0)
          return -1;
  
 -    return hev_socks5_tunnel_main_inner (tun_fd);
 +    return hev_socks5_tunnel_main_inner (tun_fd, 0, NULL, NULL);
  }
-@@ -122,5 +137,11 @@
+@@ -121,5 +136,11 @@
  EXPORT_SYMBOL void
  hev_socks5_tunnel_quit (void)
  {
@@ -110,7 +110,7 @@ diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
 diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 --- a/src/hev-socks5-tunnel.c
 +++ b/src/hev-socks5-tunnel.c
-@@ -48,4 +48,26 @@
+@@ -58,4 +58,26 @@
  static int run;
  static atomic_int tsync;
  
@@ -137,7 +137,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +}
 +
  static int tun_fd = -1;
-@@ -802,3 +824,3 @@
+@@ -803,3 +825,3 @@
  int
 -hev_socks5_tunnel_init (int tun_fd)
 +hev_socks5_tunnel_init (int tun_fd, uint64_t generation)
@@ -152,7 +152,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +    lifecycle_unlock ();
  
      return 0;
-@@ -850,4 +875,9 @@
+@@ -852,4 +877,9 @@
  {
      LOG_D ("socks5 tunnel fini");
  
@@ -162,7 +162,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
 +    lifecycle_unlock ();
 +
  retry:
-@@ -897,12 +927,19 @@
+@@ -896,12 +926,19 @@
 -void
 -hev_socks5_tunnel_stop (void)
 +static void
@@ -184,7 +184,7 @@ diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
      if (res & SYNC_WAIT) {
          usleep (500);
          goto retry;
-@@ -916,4 +964,17 @@
+@@ -920,4 +968,17 @@
      }
  
      atomic_fetch_and (&tsync, ~SYNC_WAIT);
