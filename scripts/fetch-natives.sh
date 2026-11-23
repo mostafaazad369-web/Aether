@@ -59,7 +59,8 @@ clone_repo() {
       exit 1
     }
     git -C "${dir}" apply "${hev_patch}"
-    grep -q "hev_socks5_tunnel_main_with_ready_callback" "${dir}/src/hev-main.c" || {
+    grep -q "hev_socks5_tunnel_main_with_ready_callback" "${dir}/src/hev-main.c" && \\
+      grep -q "hev_socks5_tunnel_quit_generation" "${dir}/src/hev-main.c" || {
       echo "ERROR: HEV ready-callback API missing after patch." >&2; exit 1;
     }
     echo "   applied Aether generation-safe HEV lifecycle patch"
