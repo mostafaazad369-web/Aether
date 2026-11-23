@@ -183,7 +183,7 @@ The native bridge therefore needs at least distinct `IDLE`, `STARTING`, `RUNNING
 
 1. Reserve a generation and enter STARTING under the native mutex before releasing it.
 2. Prepare the copied arguments and create the worker as part of that generation's startup transaction. Concurrent starts must wait for or observe that exact transaction; they must not report success merely because STARTING is occupied.
-3. A stop during STARTING must record a pending stop request. It must not call the upstream quit API until the worker has reached a point where the HEV core has initialized the event channel and can accept quit safely.
+3. A stop during STARTING may call the upstream quit API: the pinned HEV revision's audited `SYNC_STOP` protocol safely records pre-`SYNC_SEND` stop requests and prevents the event loop from starting. This behavior is revision-specific and must be re-audited on upgrades.
 4. The worker must publish RUNNING only for its own current generation, and on every return path publish EXITED / signal waiters after `hev_socks5_tunnel_main()` has returned and its internal finalization is complete.
 5. A restart must not enter a new generation until the prior generation is confirmed EXITED. Any wait/join must occur without holding the mutex needed by the worker to publish completion.
 6. JNI/Kotlin callers must distinguish “start accepted/in progress” from “worker running”, and “quit requested” from “worker exited”. A bounded wait result may time out, but timeout must never be translated into STOPPED.
