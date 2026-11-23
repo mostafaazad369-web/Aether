@@ -378,9 +378,27 @@ class AetherVpnService : VpnService() {
     private fun hydrateSecrets(profile: ConnectionProfile): ConnectionProfile {
         if (profile.teamAuth == TeamAuth.OFF) return profile
         val secrets = SecretStore(applicationContext)
+        fun read(name: String): String = when (val result = secrets.readResult(name)) {
+            SecretStore.ReadResult.Missing -> ""
+            is SecretStore.ReadResult.Value -> result.value
+            is SecretStore.ReadResult.KeyUnavailable ->
+                throw IllegalStateException("Zero Trust credential key is unavailable")
+            is SecretStore.ReadResult.CorruptData ->
+                throw IllegalStateException("Zero Trust credential data is damaged")
+            is SecretStore.ReadResult.StorageFailure ->
+                throw IllegalStateException("Zero Trust credential storage failed")
+        }
+        val clientSecret = read(SecretStore.ACCESS_SECRET)
+        val accessToken = read(SecretStore.ACCESS_TOKEN)
+        if (profile.teamAuth == TeamAuth.SERVICE_TOKEN && clientSecret.isBlank()) {
+            throw IllegalStateException("Zero Trust service-token secret is missing")
+        }
+        if (profile.teamAuth == TeamAuth.TOKEN && accessToken.isBlank()) {
+            throw IllegalStateException("Zero Trust enrolment token is missing")
+        }
         return profile.copy(
-            accessClientSecret = secrets.read(SecretStore.ACCESS_SECRET),
-            accessToken = secrets.read(SecretStore.ACCESS_TOKEN),
+            accessClientSecret = clientSecret,
+            accessToken = accessToken,
             accessSignInToken = signInTokenFor(profile),
         )
     }
@@ -402,8 +420,18 @@ class AetherVpnService : VpnService() {
     private fun signInTokenFor(profile: ConnectionProfile): String {
         if (profile.teamAuth != TeamAuth.EMAIL || !profile.hasTeam) return ""
         val store = TeamSignInStore(applicationContext)
+        val storedRecord = when (val stored = store.loadResult()) {
+            TeamSignInStore.LoadResult.Missing -> null
+            is TeamSignInStore.LoadResult.Record -> stored.value
+            is TeamSignInStore.LoadResult.KeyUnavailable ->
+                throw IllegalStateException("Zero Trust sign-in key is unavailable")
+            is TeamSignInStore.LoadResult.CorruptData ->
+                throw IllegalStateException("Zero Trust sign-in data is damaged")
+            is TeamSignInStore.LoadResult.StorageFailure ->
+                throw IllegalStateException("Zero Trust sign-in storage failed")
+        }
         val decision = TeamSignInHandoff.decide(
-            record = store.load(),
+            record = storedRecord,
             rawTeam = profile.team,
             rawEmail = profile.accessEmail,
             isEnrolled = { team -> TeamMembership.isEnrolled(filesDir, team) },
@@ -427,7 +455,9 @@ class AetherVpnService : VpnService() {
                 ""
             }
             TeamSignInHandoff.Decision.AlreadyEnrolled -> {
-                store.clear()
+                if (store.clear() != SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w(ZT_TAG, "Could not clear the already-used Zero Trust sign-in record.")
+                }
                 DiagnosticsLog.i(
                     ZT_TAG,
                     "This device is already enrolled in this team, so the saved sign-in is no " +
@@ -436,7 +466,9 @@ class AetherVpnService : VpnService() {
                 ""
             }
             TeamSignInHandoff.Decision.Unusable -> {
-                store.clear()
+                if (store.clear() != SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w(ZT_TAG, "Could not clear the unusable Zero Trust sign-in record.")
+                }
                 DiagnosticsLog.w(
                     ZT_TAG,
                     "The saved Zero Trust sign-in has expired and was removed; a code will be " +
@@ -451,8 +483,6 @@ class AetherVpnService : VpnService() {
         // A new connect supersedes pending stop/lockdown UI finalization. The
         // teardown still finishes before this session touches shared resources.
         stopGeneration.incrementAndGet()
-        val profile = hydrateSecrets(rawProfile)
-        lastProfile = profile
         // 1.2.2 PROTOCOL-SWITCH FIX: this used to bail out silently whenever a
         // previous run coroutine was still winding down ("if active, return"),
         // so a connect tapped right after a disconnect — or right after
@@ -475,6 +505,8 @@ class AetherVpnService : VpnService() {
                 previousRun.join()
             }
             try {
+                val profile = hydrateSecrets(rawProfile)
+                lastProfile = profile
                 connectFlow(profile)
             } catch (e: CancellationException) {
                 ChainTrace.end("cancelled")

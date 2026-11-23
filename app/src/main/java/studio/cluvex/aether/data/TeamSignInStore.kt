@@ -3,29 +3,32 @@ package studio.cluvex.aether.data
 import android.content.Context
 import studio.cluvex.aether.core.TeamSignInRecord
 
-/**
- * Keeps the one pre-connect Zero Trust sign-in ([TeamSignInRecord]) sealed in
- * [SecretStore].
- *
- * One record, not one per team: the Settings screen holds one team and one
- * address, and a record for anything else is ignored anyway
- * ([TeamSignInRecord.matches]). A new sign-in replaces it; "Sign out" and
- * "Reset settings" ([SecretStore.clear]) remove it.
- *
- * Separate from [ProfileStore] on purpose. The profile is what the user TYPED and
- * is saved on every keystroke; this is what Cloudflare ISSUED, and it is written
- * only when a sign-in succeeds. Keeping it out of the profile also keeps it out
- * of the Intent the UI sends to the VPN service: the service reads it from here
- * itself, like the other two Zero Trust secrets.
- */
+/** Keystore-backed storage for the pre-connect Zero Trust sign-in. */
 class TeamSignInStore(context: Context) {
-
     private val secrets = SecretStore(context.applicationContext)
 
-    /** The stored sign-in, or null when there is none or it cannot be read. */
-    fun load(): TeamSignInRecord? = TeamSignInRecord.decode(secrets.read(SecretStore.ACCESS_SIGNIN))
+    sealed interface LoadResult {
+        data object Missing : LoadResult
+        data class Record(val value: TeamSignInRecord) : LoadResult
+        data class KeyUnavailable(val cause: Throwable? = null) : LoadResult
+        data class CorruptData(val cause: Throwable? = null) : LoadResult
+        data class StorageFailure(val cause: Throwable? = null) : LoadResult
+    }
 
-    fun save(record: TeamSignInRecord) = secrets.write(SecretStore.ACCESS_SIGNIN, record.encode())
+    fun loadResult(): LoadResult = when (val result = secrets.readResult(SecretStore.ACCESS_SIGNIN)) {
+        SecretStore.ReadResult.Missing -> LoadResult.Missing
+        is SecretStore.ReadResult.Value -> TeamSignInRecord.decode(result.value)
+            ?.let(LoadResult::Record) ?: LoadResult.CorruptData()
+        is SecretStore.ReadResult.KeyUnavailable -> LoadResult.KeyUnavailable(result.cause)
+        is SecretStore.ReadResult.CorruptData -> LoadResult.CorruptData(result.cause)
+        is SecretStore.ReadResult.StorageFailure -> LoadResult.StorageFailure(result.cause)
+    }
 
-    fun clear() = secrets.write(SecretStore.ACCESS_SIGNIN, "")
+    @Deprecated("Use loadResult and handle storage failures explicitly")
+    fun load(): TeamSignInRecord? = (loadResult() as? LoadResult.Record)?.value
+
+    fun save(record: TeamSignInRecord): SecretStore.WriteResult =
+        secrets.writeResult(SecretStore.ACCESS_SIGNIN, record.encode())
+
+    fun clear(): SecretStore.WriteResult = secrets.clearResult(SecretStore.ACCESS_SIGNIN)
 }
