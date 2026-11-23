@@ -106,3 +106,44 @@ Similarly, `HevTunnel.start()` precedes `tunnelStarted = true`, and `SocksTunBri
 Do not introduce a coordinator that merely serializes calls to `cleanupNativeOnlyImpl()`. The first implementation slice, once the dependency contracts above are inspected, should be an ownership API with explicit states such as registered / starting / active / stopping / stopped, plus a generation/session lease. Resource registration must happen before any operation that can spawn a process, bind a listener, or enter JNI. The API must also support the lockdown TUN as a deliberately retained resource while forwarding resources are released.
 
 Until that API can own every listed resource and the crash path, leave the runtime teardown code unchanged. This avoids creating a false sense of safety from tests that only exercise a standalone mutex or generation counter.
+
+
+## Dependency-contract inspection (2026-11-23)
+
+The implementations named in the inventory were inspected on this branch. This narrows the design, but does not yet make a runtime owner safe to introduce.
+
+### Hev JNI facade
+
+HevTunnel is a process-wide Kotlin object with a volatile Boolean running. start() checks the flag, enters TProxyStartService(configPath, tunFd), and sets the flag only after JNI reports success. stop() checks the same flag, calls TProxyStopService(), then clears it. There is no common monitor/lock around start and stop, and the Boolean cannot represent a start currently inside JNI. Two concurrent starts can both pass the check; a stop concurrent with a start can observe running == false and return while JNI startup is still in flight. The service also sets tunnelStarted = true only after HevTunnel.start() returns. The facade's stop is idempotent at the Boolean level, but the native stop completion/boundedness contract is not established by this Kotlin wrapper.
+
+### Userspace TUN bridge
+
+SocksTunBridge is an instance resource. start() uses AtomicBoolean.getAndSet(true) and then starts writer and reader threads; the service publishes the instance to tunBridge only after start() returns. The read thread can block in TUN input and the writer polls a queue. stop() flips the flag, closes TCP/UDP sessions, shuts down its cached executor and interrupts the two threads, but it does not join them, await executor termination, or close the supplied ParcelFileDescriptor. Consequently stop is a request, not proof that all bridge work has exited. The publication race remains, and the descriptor must remain owned separately by the service until bridge readers are known to have stopped.
+
+### External transport and Psiphon front
+
+ExternalTransport defines a suspending start(), isAlive(), and synchronous stop(); the factory currently creates PsiphonTransport. The service stores the transport in externalTransport before awaiting start(), which is the correct publication order for this object. However, PsiphonTransport.start() is a long-running readiness wait (up to its configured 200-second timeout), registers PsiphonEngine.onServerChanged, and eventually starts the process-global PsiphonSocksFront. Its stop() clears that callback and stops the front, but does not itself cancel or join a concurrently executing start(). A cancellation/teardown can therefore overlap the readiness coroutine unless the future owner tracks in-flight start completion. The Psiphon front itself is a large process-global component with synchronized start/stop/retarget entry points and atomic running state; it owns listener, worker pools, UDP associations and background threads. Its own synchronization is stronger than the small Tor front, but shutdown of worker pools is still shutdownNow() rather than an explicit drain/join contract.
+
+### Share bridge
+
+ShareBridge is a process-global object. startSync() serializes setup under synchronized(this), binds loopback listeners, and starts accept loops. stop() first clears the externally visible active/LAN flags, increments a session token under the object monitor, then performs closeAllLocked() asynchronously on a daemon thread only if that token is still current. This protects a newer startSync() from being closed by an older queued stop, which is a useful generation pattern to preserve. It does mean stop() returns before listener closure is complete; the resource owner must track the stop operation, not infer completion from return. The asynchronous start() wrapper has a similar queued-start consideration. The bridge starts per-connection daemon threads; closeAllLocked() closes listeners but does not synchronously join every accepted client thread. The static bridge's lifecycle cannot be treated as a simple service-field resource.
+
+### Tor SOCKS front
+
+TorSocksFront is also a process-global object, but unlike PsiphonSocksFront its public start() and stop() are not synchronized. start() may call stop(), mutates proxy host/port and counters, binds a ServerSocket, publishes listener/pool, sets running, and submits an accept loop. stop() clears running, closes the listener, calls shutdownNow() on the pool and clears association tracking. Concurrent start/stop calls can interleave these assignments and may close or overwrite a newer listener/pool. The caller's current ordering (stop the front before stopping its upstream engine) is intentional and must remain a dependency edge in the owner. This front needs its own serialized lifecycle contract or must be exclusively serialized by the owner.
+
+### Child process wrappers and Xray watcher
+
+AetherProcess.start() calls ProcessBuilder.start() and then stores the returned process in its instance field; stop() clears that field and waits up to 250 ms before force-killing. XrayProcess.start() first calls stop(), writes a config file, starts the child, and only then publishes its process; stop() waits up to 400 ms before force-killing and deletes the config file. Neither wrapper serializes its own concurrent start/stop operations. The service's Xray watcher also has a generation token and lock, but the runner's public lifecycle is not intrinsically thread-safe. The owner must register the wrapper before start() and serialize watcher restarts with teardown; a generation check alone cannot reap an unpublished child.
+
+### Remaining unknowns and dependency edges
+
+- CustomSession is imported and used by AetherVpnService, but no CustomSession source file appears in the branch tree. Its backing storage, static/process scope, and thread-safety therefore remain unverified; do not assume it is merely UI metadata until its dependency/source origin is located.
+- TProxyService is the JNI boundary behind HevTunnel. Its native stop semantics and whether it waits for the native event loop to exit need inspection in the JNI/C implementation.
+- The service cleanup order is deliberate: stop sharing first; stop the userspace/hev forwarder; stop the external transport; stop TorSocksFront before the engine that provides its upstream; stop the engine; close the TUN descriptor. Lockdown cleanup uses the forwarding-only path and intentionally retains the TUN. These are dependency edges, not arbitrary list ordering.
+- ShareBridge.stop() is asynchronous, and SocksTunBridge.stop() / TorSocksFront.stop() request shutdown without joining all workers. The current code does not establish a single bounded "all owned work has exited" barrier.
+- PsiphonSocksFront and ShareBridge spawn daemon threads that are not represented by the service's coroutine jobs. A future owner needs explicit drain semantics or documented process-death fallback for those threads and their sockets.
+
+### Updated implementation decision
+
+Do not add runtime ownership code yet. The inspection confirms that the resource registry must represent both the resource handle and its in-flight lifecycle operation, and must preserve dependency ordering. A safe first slice should not be a generic AutoCloseable bag: it needs resource-specific start/stop adapters, session leases, a start-in-flight barrier, and a teardown result that distinguishes "stop requested" from "workers/process/native loop confirmed stopped". It must also model the lockdown TUN as retained while forwarding resources drain. Before implementation, inspect TProxyService JNI/C shutdown and resolve the CustomSession source, then write integration tests around the real service lifecycle and fakeable resource adapters.
