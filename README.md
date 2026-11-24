@@ -1,13 +1,13 @@
 > **1.6.0:** [Release notes](.github/release-notes.md) · [Detailed notes](docs/RELEASE_1.6.0.md) · [Changelog](CHANGELOG.md)
 
 <p align="center">
-  <img src="docs/ads.png" alt="Aether — Freedom, in one tap" width="100%">
+  <img src="docs/ads.png" alt="Aether Pro — Freedom, in one tap" width="100%">
 </p>
 
-<h1 align="center">Aether Mobile</h1>
+<h1 align="center">Aether Pro</h1>
 
 <p align="center">
-  A dark <b>Material You</b> Android VPN client with the Aether engine, Tor, Psiphon
+  A free, dark <b>Material You</b> Android VPN app powered by the Aether engine, Tor, Psiphon
   and Xray built <b>inside the app</b>.
 </p>
 
@@ -47,7 +47,7 @@
 
 ## Overview
 
-Aether Mobile runs the Aether engine on the phone and brings up an Android
+Aether Pro runs the Aether engine on the phone and brings up an Android
 `VpnService`. A built-in tunnel core (`hev-socks5-tunnel`) forwards every packet
 from the VPN interface into the engine's local SOCKS5 proxy, so no second app
 (such as v2rayNG) is needed.

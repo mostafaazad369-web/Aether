@@ -1,13 +1,13 @@
 > **نسخهٔ 1.6.0:** [یادداشت انتشار](.github/release-notes.md) · [جزئیات تغییرات](docs/RELEASE_1.6.0.fa.md) · [تاریخچهٔ تغییرات](CHANGELOG.md)
 
 <p align="center">
-  <img src="docs/ads.png" alt="Aether — آزادی، با یک لمس" width="100%">
+  <img src="docs/ads.png" alt="Aether Pro — آزادی، با یک لمس" width="100%">
 </p>
 
-<h1 align="center">Aether Mobile</h1>
+<h1 align="center">Aether Pro</h1>
 
 <p align="center">
-  کلاینت VPN اندروید با طراحی تیرهٔ <b>Material You</b>؛ موتور Aether، Tor، سایفون و Xray
+  اپلیکیشن رایگان VPN اندروید با طراحی تیرهٔ <b>Material You</b>؛ مبتنی بر موتور Aether، Tor، سایفون و Xray
   <b>داخل خود برنامه</b> هستند.
 </p>
 
@@ -49,7 +49,7 @@
 
 ## معرفی
 
-Aether Mobile موتور Aether را روی گوشی اجرا می‌کند و یک `VpnService` اندروید بالا
+Aether Pro موتور Aether را روی گوشی اجرا می‌کند و یک `VpnService` اندروید بالا
 می‌آورد. هستهٔ تانل داخلی (`hev-socks5-tunnel`) همهٔ بسته‌ها را از رابط VPN به پراکسی
 SOCKS5 محلی موتور می‌فرستد؛ بنابراین به برنامهٔ دوم (مثل v2rayNG) نیازی نیست.
 
