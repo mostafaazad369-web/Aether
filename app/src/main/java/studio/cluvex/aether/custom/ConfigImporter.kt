@@ -245,6 +245,8 @@ object ConfigImporter {
         val clientBuilder = OkHttpClient.Builder()
             .connectTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
             .readTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            // Bound the whole exchange too; readTimeout alone permits slow-trickle responses.
+            .callTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)

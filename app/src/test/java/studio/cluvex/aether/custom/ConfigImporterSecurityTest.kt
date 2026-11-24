@@ -1,6 +1,7 @@
 package studio.cluvex.aether.custom
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import java.net.InetAddress
@@ -217,6 +218,12 @@ class ConfigImporterSecurityTest {
             ConfigImporter.validateSubscriptionRedirect(target, 6)
         }
         assertTrue(error.message.orEmpty().contains("redirected too many times"))
+    }
+
+    @Test
+    fun `subscription HTTP clients enforce an overall request timeout`() {
+        assertEquals(20_000, ConfigImporter.createSubscriptionHttpClient(null).callTimeoutMillis)
+        assertEquals(20_000, ConfigImporter.createSubscriptionHttpClient(1080).callTimeoutMillis)
     }
 
     @Test
