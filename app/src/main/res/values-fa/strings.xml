@@ -375,6 +375,10 @@
     <string name="ai_key_paste">جای‌گذاری</string>
     <string name="ai_key_forget">پاک کردن کلید و فهرست مدل‌ها</string>
     <string name="ai_key_forgotten">کلید ⁨API⁩ پاک شد</string>
+    <string name="ai_key_storage_unavailable">ذخیره‌ساز امن اندروید در دسترس نیست. کلید ذخیره‌شده خوانده یا به‌روزرسانی نمی‌شود؛ درخواست‌های هوش مصنوعی غیرفعال‌اند.</string>
+    <string name="ai_key_storage_corrupt">دادهٔ رمزنگاری‌شدهٔ کلید آسیب دیده و حفظ شده است. تا رفع مشکل ذخیره‌سازی اعتبارنامه، درخواست‌های هوش مصنوعی غیرفعال می‌مانند.</string>
+    <string name="ai_key_storage_failure">ذخیره‌سازی امن اعتبارنامه ناموفق بود. کلید تأیید نشده و درخواست‌های هوش مصنوعی غیرفعال‌اند.</string>
+    <string name="ai_key_forget_failed">پاک‌سازی امن کلید ناموفق بود. پیام موفقیت نمایش داده نشد؛ وضعیت ذخیره‌سازی اعتبارنامه را بررسی کنید.</string>
     <string name="ai_test">تست اتصال به ⁨API⁩</string>
     <string name="ai_test_hint">کلید را بررسی می‌کند و مدل‌های مجاز آن را فهرست می‌کند</string>
     <string name="ai_test_running">در حال تست…</string>
