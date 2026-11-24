@@ -80,6 +80,7 @@ class ConfigImporterSecurityTest {
             "3fff::1",
             "3fff:0fff::1",
             "5f00::1",
+            "5f00:ffff::1",
         ).forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
@@ -121,12 +122,23 @@ class ConfigImporterSecurityTest {
     @Test
     fun `IPv6 IANA non-global special-purpose ranges are rejected`() {
         listOf(
-            "2001:2::1",       // benchmarking
-            "2001:10::1",      // deprecated ORCHID
-            "2001:10:ffff::1", // end of deprecated ORCHID /28
+            "2001:2::1",          // benchmarking
+            "2001:10::1",         // deprecated ORCHID
+            "2001:1f:ffff::1",    // final address space inside deprecated ORCHID /28
+            "2001:2:0:0:ffff::1", // still inside benchmarking /48
+            "5f00::1",            // SRv6 SIDs
+            "5f00:ffff::1",      // final address space inside SRv6 /16
         ).forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
+        assertTrue(
+            "2001:20::1 is outside the deprecated ORCHID /28",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("2001:20::1")),
+        )
+        assertTrue(
+            "5f01::1 is outside the SRv6 SIDs /16",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("5f01::1")),
+        )
     }
 
     @Test
