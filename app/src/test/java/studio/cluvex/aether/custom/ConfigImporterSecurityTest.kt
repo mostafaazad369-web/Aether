@@ -221,6 +221,18 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
+    fun `subscription redirect chain shares one monotonic timeout budget`() {
+        assertEquals(500L, ConfigImporter.remainingSubscriptionTimeoutNanos(1_500L, 1_000L))
+        val error = assertThrows(ConfigImportException::class.java) {
+            ConfigImporter.remainingSubscriptionTimeoutNanos(1_000L, 1_000L)
+        }
+        assertTrue(error.message.orEmpty().contains("timed out"))
+        assertThrows(ConfigImportException::class.java) {
+            ConfigImporter.remainingSubscriptionTimeoutNanos(900L, 1_000L)
+        }
+    }
+
+    @Test
     fun `subscription HTTP clients enforce an overall request timeout`() {
         assertEquals(20_000, ConfigImporter.createSubscriptionHttpClient(null).callTimeoutMillis)
         assertEquals(20_000, ConfigImporter.createSubscriptionHttpClient(1080).callTimeoutMillis)

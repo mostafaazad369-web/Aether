@@ -122,6 +122,15 @@ object ConfigImporter {
         }
     }
 
+    /** Returns the remaining monotonic budget for one hop of a subscription download. */
+    internal fun remainingSubscriptionTimeoutNanos(deadlineNanos: Long, nowNanos: Long): Long {
+        val remaining = deadlineNanos - nowNanos
+        if (remaining <= 0L) {
+            throw ConfigImportException("subscription download timed out")
+        }
+        return remaining
+    }
+
     /** Enforces the same redirect budget used by the live downloader. */
     internal fun validateSubscriptionRedirect(url: URL, redirectsFollowed: Int) {
         if (redirectsFollowed > MAX_REDIRECTS) {
@@ -274,6 +283,8 @@ object ConfigImporter {
         }
         val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
         val client = createSubscriptionHttpClient(port.takeIf { it in 1..65535 })
+        // One deadline covers every redirect hop and the final response body.
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TIMEOUT_MS.toLong())
         for (redirect in 0..MAX_REDIRECTS) {
             validateSubscriptionRedirect(target, redirect)
             val request = Request.Builder()
@@ -283,7 +294,11 @@ object ConfigImporter {
                 .get()
                 .build()
             val response = try {
-                client.newCall(request).execute()
+                val remainingNanos = remainingSubscriptionTimeoutNanos(deadlineNanos, System.nanoTime())
+                val hopClient = client.newBuilder()
+                    .callTimeout(remainingNanos, TimeUnit.NANOSECONDS)
+                    .build()
+                hopClient.newCall(request).execute()
             } catch (e: Exception) {
                 throw ConfigImportException("the address could not be downloaded (${e.javaClass.simpleName})")
             }
