@@ -3090,6 +3090,7 @@ class AetherVpnService : VpnService() {
 
     /** Stops sharing, the forwarder and the engine but deliberately KEEPS [tun]. */
     private fun cleanupForwardingOnly() {
+        stopTrackedRaceEngines()
         activeForwardPort = 0
         sessionExitPort = 0
         try {
@@ -3208,7 +3209,6 @@ class AetherVpnService : VpnService() {
             }
         } catch (_: Throwable) {
         }
-        stopTrackedRaceEngines()
         stopTrackedRaceEngines()
         val currentEngine = engine
         if (currentEngine == null || runCatching { currentEngine.stop() }.getOrDefault(false)) {
