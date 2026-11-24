@@ -31,6 +31,25 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
+    fun `IANA globally reachable IPv4 anycast exceptions are accepted within 192.0.0.0 slash 24()` {
+        assertTrue(
+            "192.0.0.9 is the globally reachable PCP Anycast address",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("192.0.0.9")),
+        )
+        assertTrue(
+            "192.0.0.10 is the globally reachable TURN Anycast address",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("192.0.0.10")),
+        )
+    }
+
+    @Test
+    fun `other non-global IANA addresses in 192.0.0.0 slash 24 remain rejected()` {
+        listOf("192.0.0.8", "192.0.0.170", "192.0.0.171", "192.0.0.11", "192.0.0.255").forEach {
+            assertFalse("$it must remain non-global per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
     fun `IPv6 unique local link local special purpose and documentation destinations are rejected`() {
         listOf(
             "fc00::1",

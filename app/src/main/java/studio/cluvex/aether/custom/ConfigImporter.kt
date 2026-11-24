@@ -206,6 +206,10 @@ object ConfigImporter {
             val mask = (0xffff_ffffL shl (32 - prefix)) and 0xffff_ffffL
             return (value and mask) == (network and mask)
         }
+        // IANA marks 192.0.0.0/24 as non-global overall, but these two
+        // exact anycast hosts are explicitly globally reachable.
+        if (value == 0xc0000009L || value == 0xc000000aL) return true
+
         val blocked = listOf(
             0x00000000L to 8,   // "this" network
             0x0a000000L to 8,   // private
