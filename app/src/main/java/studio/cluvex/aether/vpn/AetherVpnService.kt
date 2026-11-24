@@ -1507,8 +1507,7 @@ class AetherVpnService : VpnService() {
         } finally {
             // Belt and braces: whatever happened above, nothing from a lane may
             // still be holding a port when the session's own engine starts.
-            raceEngines.forEach { runCatching { it.stop() } }
-            raceEngines.clear()
+            stopTrackedRaceEngines()
         }
     }
 
@@ -1570,8 +1569,12 @@ class AetherVpnService : VpnService() {
                 // A probe is over the moment it has answered, win or lose. This runs
                 // on cancellation too, which is what stops a losing lane outliving
                 // the race.
-                runCatching { engine.stop() }
-                raceEngines.remove(engine)
+                val stopped = runCatching { engine.stop() }.getOrDefault(false)
+                if (stopped) {
+                    raceEngines.remove(engine)
+                } else {
+                    DiagnosticsLog.e(TAG, "Smart Plus lane $laneNumber: engine exit is unconfirmed; retaining it for teardown retry.")
+                }
             }
         }
         DiagnosticsLog.d(TAG, "Smart Plus lane $laneNumber: out of tactics.")
@@ -1756,7 +1759,9 @@ class AetherVpnService : VpnService() {
             "protocol=${profile.protocol} scan=${profile.scanMode} h2=${profile.masqueHttp2} budget=${timeoutMs}ms" +
                 (if (upstream.isNotBlank()) " upstream=$upstream" else ""),
         )
-        engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode)) }
+        val launchedEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+        engine = launchedEngine
+        launchedEngine.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode))
 
         AetherController.setState(ConnectionState.Connecting)
         updateNotification(getString(R.string.state_connecting))
@@ -1996,7 +2001,12 @@ class AetherVpnService : VpnService() {
                             "Watchdog: tunnel dead across $WATCHDOG_FAIL_CYCLES consecutive checks -- restarting the engine.",
                         )
                         probeFailures = 0
-                        engine?.stop()
+                        val stopped = engine?.stop() ?: true
+                        if (stopped) {
+                            engine = null
+                        } else {
+                            DiagnosticsLog.e(TAG, "Watchdog could not confirm engine exit; keeping its lease and will retry teardown.")
+                        }
                     }
                 }
                 continue
@@ -2017,7 +2027,20 @@ class AetherVpnService : VpnService() {
             updateNotification(getString(R.string.state_reconnecting))
             delay(backoff)
 
-            engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode)) }
+            // Reap the previous (possibly naturally exited) process before a
+            // replacement can unseal or use the same identity files.
+            val previousEngine = engine
+            if (previousEngine != null) {
+                if (!runCatching { previousEngine.stop() }.getOrDefault(false)) {
+                    DiagnosticsLog.e(TAG, "Reconnect deferred: previous engine is not confirmed reaped.")
+                    delay(WATCHDOG_INTERVAL_MS)
+                    continue
+                }
+                engine = null
+            }
+            val replacementEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+            engine = replacementEngine
+            replacementEngine.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode))
             if (PortProbe.awaitOpen(SOCKS_HOST, SOCKS_PORT, profile.connectTimeoutMs()) { engine?.isAlive() == true }) {
                 // Same gate as the initial connect: never claim Connected after
                 // a silent engine restart until traffic really flows again.
@@ -2192,7 +2215,9 @@ class AetherVpnService : VpnService() {
             DiagnosticsLog.w(TAG, "Local port $SOCKS_PORT is still busy - starting anyway.")
         }
         DiagnosticsLog.i(TAG, "Launching engine as plain Psiphon on $SOCKS_HOST:$SOCKS_PORT")
-        engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(stage) }
+        val launchedEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+        engine = launchedEngine
+        launchedEngine.start(stage)
 
         val transport = PsiphonTransport(
             service = this,
@@ -3047,6 +3072,22 @@ class AetherVpnService : VpnService() {
         }
     }
 
+    /**
+     * Retries teardown for Smart Plus probe engines. A failed reap must stay
+     * registered: dropping the last reference would strand its identity lease.
+     */
+    private fun stopTrackedRaceEngines() {
+        val snapshot = synchronized(raceEngines) { raceEngines.toList() }
+        snapshot.forEach { candidate ->
+            val stopped = runCatching { candidate.stop() }.getOrDefault(false)
+            if (stopped) {
+                raceEngines.remove(candidate)
+            } else {
+                DiagnosticsLog.e(TAG, "Smart Plus engine exit is unconfirmed; retaining it for a later cleanup retry.")
+            }
+        }
+    }
+
     /** Stops sharing, the forwarder and the engine but deliberately KEEPS [tun]. */
     private fun cleanupForwardingOnly() {
         activeForwardPort = 0
@@ -3079,11 +3120,12 @@ class AetherVpnService : VpnService() {
             }
         } catch (_: Throwable) {
         }
-        try {
-            engine?.stop()
-        } catch (_: Throwable) {
+        val currentEngine = engine
+        if (currentEngine == null || runCatching { currentEngine.stop() }.getOrDefault(false)) {
+            engine = null
+        } else {
+            DiagnosticsLog.e(TAG, "Cleanup could not confirm engine exit; retaining its reference and identity lease.")
         }
-        engine = null
     }
 
     /** (Re)builds the TUN as a full-tunnel blackhole: routes everything, reads nothing. */
