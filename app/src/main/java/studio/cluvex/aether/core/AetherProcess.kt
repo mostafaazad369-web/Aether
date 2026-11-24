@@ -37,6 +37,23 @@ class AetherProcess(
         try {
             startInternal(profile, extraEnv)
         } catch (failure: Throwable) {
+            // A failure can happen after ProcessBuilder.start() succeeds (for
+            // example while wiring the output drainer). Reap that child before
+            // releasing the identity lease, otherwise plaintext could be sealed
+            // while a live engine is still writing it.
+            val spawned = process
+            process = null
+            if (spawned != null) {
+                runCatching {
+                    spawned.destroy()
+                    if (!spawned.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        spawned.destroyForcibly()
+                        spawned.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    }
+                }
+                reapPsiphonOrphans()
+                LoginCodePrompt.detach()
+            }
             engineLease = null
             lease.release()
             throw failure
