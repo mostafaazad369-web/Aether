@@ -218,4 +218,77 @@ class ConfigImporterSecurityTest {
         }
         assertTrue(error.message.orEmpty().contains("redirected too many times"))
     }
+
+    @Test
+    fun `SOCKS subscription sends unresolved hostname to proxy without calling client DNS`() {
+        val expectedHost = "dns-must-stay-on-proxy.invalid"
+        val dnsCalls = java.util.concurrent.atomic.AtomicInteger()
+        val capturedHost = java.util.concurrent.atomic.AtomicReference<String?>()
+        val serverFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val server = java.net.ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+
+        val proxyThread = Thread {
+            try {
+                server.accept().use { socket ->
+                    socket.soTimeout = 5_000
+                    val input = java.io.DataInputStream(socket.getInputStream())
+                    val output = socket.getOutputStream()
+
+                    // SOCKS5 greeting: version 5, one method, no authentication.
+                    assertTrue(input.readUnsignedByte() == 5)
+                    val methodCount = input.readUnsignedByte()
+                    repeat(methodCount) { input.readUnsignedByte() }
+                    output.write(byteArrayOf(5, 0))
+                    output.flush()
+
+                    // CONNECT request. ATYP=3 means the target is a domain name,
+                    // not an IP address resolved by the client.
+                    assertTrue(input.readUnsignedByte() == 5)
+                    assertTrue(input.readUnsignedByte() == 1)
+                    input.readUnsignedByte() // reserved
+                    val addressType = input.readUnsignedByte()
+                    assertTrue("SOCKS target must be encoded as a domain", addressType == 3)
+                    val hostLength = input.readUnsignedByte()
+                    val hostBytes = ByteArray(hostLength)
+                    input.readFully(hostBytes)
+                    capturedHost.set(String(hostBytes, Charsets.US_ASCII))
+                    input.readUnsignedShort() // destination port
+
+                    // Refuse the connection after capturing the CONNECT request.
+                    output.write(byteArrayOf(5, 1, 0, 1, 0, 0, 0, 0, 0, 0))
+                    output.flush()
+                }
+            } catch (t: Throwable) {
+                serverFailure.set(t)
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        try {
+            val dns = okhttp3.Dns { _ ->
+                dnsCalls.incrementAndGet()
+                throw java.net.UnknownHostException("client DNS must not resolve SOCKS targets")
+            }
+            val client = ConfigImporter.createSubscriptionHttpClient(server.localPort, dns)
+            assertThrows(java.io.IOException::class.java) {
+                client.newCall(
+                    okhttp3.Request.Builder()
+                        .url("https://$expectedHost/config")
+                        .build(),
+                ).execute()
+            }
+
+            proxyThread.join(5_000)
+            assertFalse("SOCKS server thread should finish", proxyThread.isAlive)
+            serverFailure.get()?.let { throw AssertionError("SOCKS test server failed", it) }
+            assertTrue("SOCKS proxy must receive the original hostname", capturedHost.get() == expectedHost)
+            assertTrue("custom client DNS must not be called for SOCKS targets", dnsCalls.get() == 0)
+        } finally {
+            server.close()
+            proxyThread.join(1_000)
+        }
+    }
+
 }

@@ -230,13 +230,18 @@ object ConfigImporter {
         return blocked.none { (network, prefix) -> inRange(network, prefix) }
     }
 
-    private fun download(url: String): ByteArray {
-        // Subscription URLs can contain credentials. Never send them over cleartext,
-        // and never let an HTTPS endpoint downgrade the request through a redirect.
-        var target = runCatching { URL(url) }.getOrElse {
-            throw ConfigImportException("invalid subscription address")
-        }
-        val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
+    /**
+     * Builds the same client used by subscription downloads. In SOCKS mode OkHttp
+     * must receive the unresolved destination hostname so the proxy performs DNS;
+     * in direct mode every DNS answer is validated and pinned into the route.
+     *
+     * [directDns] is injectable for deterministic tests. It is deliberately never
+     * consulted when [proxyPort] selects the SOCKS path.
+     */
+    internal fun createSubscriptionHttpClient(
+        proxyPort: Int?,
+        directDns: Dns = Dns.SYSTEM,
+    ): OkHttpClient {
         val clientBuilder = OkHttpClient.Builder()
             .connectTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
             .readTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -244,20 +249,29 @@ object ConfigImporter {
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
 
-        if (port in 1..65535) {
-            clientBuilder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+        if (proxyPort != null && proxyPort in 1..65535) {
+            clientBuilder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort)))
         } else {
             clientBuilder.dns(object : Dns {
                 override fun lookup(hostname: String): List<InetAddress> =
                     try {
-                        validateDirectDnsResults(Dns.SYSTEM.lookup(hostname))
+                        validateDirectDnsResults(directDns.lookup(hostname))
                     } catch (e: ConfigImportException) {
                         throw UnknownHostException(e.message)
                     }
             })
         }
+        return clientBuilder.build()
+    }
 
-        val client = clientBuilder.build()
+    private fun download(url: String): ByteArray {
+        // Subscription URLs can contain credentials. Never send them over cleartext,
+        // and never let an HTTPS endpoint downgrade the request through a redirect.
+        var target = runCatching { URL(url) }.getOrElse {
+            throw ConfigImportException("invalid subscription address")
+        }
+        val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
+        val client = createSubscriptionHttpClient(port.takeIf { it in 1..65535 })
         for (redirect in 0..MAX_REDIRECTS) {
             validateSubscriptionRedirect(target, redirect)
             val request = Request.Builder()
