@@ -255,9 +255,12 @@ object AiSession {
         keySaveJob = scope.launch {
             kotlinx.coroutines.delay(KEY_SAVE_DEBOUNCE_MS)
             val target = store
-            val result = target?.saveKey(trimmed)
-                ?: GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE)
-            when (result) {
+            if (target == null) {
+                _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                _keySaving.value = false
+                return@launch
+            }
+            when (val result = target.saveKey(trimmed)) {
                 GeminiStore.OperationResult.Success -> {
                     when (val loaded = target.settings.first()) {
                         is GeminiStore.SettingsResult.Available -> {
