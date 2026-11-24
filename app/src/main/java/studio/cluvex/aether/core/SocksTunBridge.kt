@@ -747,7 +747,7 @@ class SocksTunBridge(
 
                 executor.execute { readFromSocks(ins) }
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val data = queue.poll(2, TimeUnit.SECONDS)
 
                     if (data == null) {
@@ -780,7 +780,7 @@ class SocksTunBridge(
                     }
                 }
             } catch (exception: Exception) {
-                if (isRunning.get() && !isClosed.get()) {
+                if (workerGroup.isRunning && !isClosed.get()) {
                     LogRepository.w("[Routing] TCP session failed: ${exception.localizedMessage}")
                 }
             } finally {
@@ -793,7 +793,7 @@ class SocksTunBridge(
                 val buffer = ByteArray(131072)
                 val maxPayload = if (version == 4) (mtu - 40).coerceAtLeast(20) else (mtu - 60).coerceAtLeast(20)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val n = ins.read(buffer)
 
                     if (n <= 0) {
@@ -936,7 +936,7 @@ class SocksTunBridge(
 
                 val relayAddress = InetSocketAddress(relayHost, relayPort)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val payload = payloadQueue.poll(2, TimeUnit.SECONDS)
 
                     if (payload == null) {
@@ -960,7 +960,7 @@ class SocksTunBridge(
                     lastActivity.set(SystemClock.elapsedRealtime())
                 }
             } catch (exception: Exception) {
-                if (isRunning.get() && !isClosed.get()) {
+                if (workerGroup.isRunning && !isClosed.get()) {
                     LogRepository.w("[Routing] UDP session failed: ${exception.localizedMessage}")
                 }
             } finally {
@@ -973,7 +973,7 @@ class SocksTunBridge(
                 val buf = ByteArray(65535)
                 val maxPayload = if (version == 4) (mtu - 28).coerceAtLeast(8) else (mtu - 48).coerceAtLeast(8)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     try {
                         val packet = DatagramPacket(buf, buf.size)
                         sock.receive(packet)
