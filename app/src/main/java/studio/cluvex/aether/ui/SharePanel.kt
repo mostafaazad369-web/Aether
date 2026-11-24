@@ -134,13 +134,19 @@ fun SharePanel(
     val proxyPassword by ShareBridge.proxyPassword.collectAsState()
     val lanClients by ShareBridge.lanClients.collectAsState()
 
-    var credentialStorageError by remember { mutableStateOf(false) }
+    // Fail closed during the initial Keystore read; never briefly expose a stale LAN session.\n    var credentialStorageError by remember { mutableStateOf(true) }
 
     // Do not enable sharing or expose credentials until the encrypted record is readable.
     LaunchedEffect(Unit) {
-        credentialStorageError = withContext(Dispatchers.IO) {
-            ShareCredentials.ensure(context) != ShareCredentials.EnsureResult.Ready
+        val ready = withContext(Dispatchers.IO) {
+            ShareCredentials.ensure(context) == ShareCredentials.EnsureResult.Ready
         }
+        if (!ready) {
+            // Keep loopback listeners only when the VPN's local proxy mode needs them.
+            ShareBridge.disableLan()
+            if (!profile.proxyMode) ShareBridge.stop()
+        }
+        credentialStorageError = !ready
     }
 
     // Which modes have a live network right now - refreshed while the card is
@@ -156,7 +162,7 @@ fun SharePanel(
     }
 
     // Self-healing: connected + switch on + LAN side not requested yet.
-    LaunchedEffect(state.isConnected, profile.lanShare, bridgeActive, lanStatus) {
+    LaunchedEffect(state.isConnected, profile.lanShare, bridgeActive, lanStatus, credentialStorageError) {
         if (!credentialStorageError && state.isConnected && profile.lanShare && lanStatus == ShareBridge.LanStatus.OFF) {
             withContext(Dispatchers.IO) { ShareBridge.enableLan() }
         }
@@ -299,7 +305,7 @@ fun SharePanel(
                                 },
                             )
                         }
-                        lanStatus == ShareBridge.LanStatus.READY && ep != null -> {
+                        !credentialStorageError && lanStatus == ShareBridge.LanStatus.READY && ep != null -> {
                             // Credentials may be on screen from here on (F-3).
                             if (authRequired) SecureSurface()
                             ReadyBlock(
@@ -319,7 +325,7 @@ fun SharePanel(
                     Spacer(Modifier.height(14.dp))
                     Divider()
                     Spacer(Modifier.height(6.dp))
-                    AuthSection(
+                    if (!credentialStorageError) AuthSection(
                         authRequired = authRequired,
                         user = proxyUser,
                         password = proxyPassword,
