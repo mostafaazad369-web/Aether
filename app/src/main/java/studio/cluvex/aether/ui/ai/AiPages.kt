@@ -555,8 +555,6 @@ private fun InfoBlock(
     }
 }
 
-/** Summary line under "Test API connection". */
-@Composable
 private fun GeminiStore.StorageError.messageResource(): Int = when (this) {
     GeminiStore.StorageError.KEY_UNAVAILABLE -> R.string.ai_key_storage_unavailable
     GeminiStore.StorageError.CORRUPT_DATA -> R.string.ai_key_storage_corrupt
@@ -564,6 +562,8 @@ private fun GeminiStore.StorageError.messageResource(): Int = when (this) {
     GeminiStore.StorageError.MISSING_KEY -> R.string.ai_key_storage_failure
 }
 
+/** Summary line under "Test API connection". */
+@Composable
 private fun probeSummary(probe: AiProbe, discovering: Boolean): String = when {
     discovering -> stringResource(R.string.ai_test_running)
     probe is AiProbe.Ok -> stringResource(R.string.ai_test_ok, probe.modelCount, probe.via)
