@@ -6,7 +6,9 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import studio.cluvex.aether.ai.AiModelPolicy
 
@@ -35,48 +37,19 @@ data class AiSettings(
     val apiKey: String = "",
     /** Bare model id the user picked, e.g. `gemini-2.0-flash`. Blank = not chosen. */
     val model: String = "",
-    /**
-     * Model ids the last successful discovery found for THIS key.
-     *
-     * Cached because discovery needs the tunnel: without a cache the model picker
-     * would be empty every time the user opened it while disconnected, which
-     * reads as "the app lost my settings" rather than "we cannot reach Google
-     * right now".
-     */
+    /** Model ids the last successful discovery found for THIS key. */
     val discoveredModels: List<String> = emptyList(),
-    /**
-     * True when [model] was picked by the user in the model sheet, false when the
-     * app picked it. 1.4.0-r5: only an APP pick is replaced by the default
-     * (Gemini 3.1 Flash-Lite) when a key is entered or the list is refreshed; a
-     * deliberate user choice is never overridden while the key can still use it.
-     */
+    /** True when [model] was picked by the user, false when the app picked it. */
     val modelUserPicked: Boolean = false,
-    /**
-     * Analyse the log on every connect - and, 1.4.0-r5, give the chat assistant a
-     * redacted excerpt of the current log with every question.
-     *
-     * 1.4.0-r5: default OFF. Sending the log to a remote model is opt-in: the user
-     * turns it on when they want it, and nothing leaves the device before that.
-     */
+    /** Analyse the log on every connect - opt-in. */
     val autoOptimize: Boolean = false,
-    /**
-     * Write a proposal straight into the profile instead of waiting for a tap.
-     *
-     * Defaults OFF on purpose. The proposal comes from a remote model, and a
-     * setting that changes itself behind the user's back is indistinguishable
-     * from a bug when the next connect behaves differently. Opt in explicitly.
-     */
+    /** Write a proposal straight into the profile instead of waiting for a tap. */
     val autoApply: Boolean = false,
     /** Show the AI icon next to individual options. */
     val showHints: Boolean = true,
 ) {
     val hasKey: Boolean get() = apiKey.isNotBlank()
 
-    /**
-     * The model to actually call: the chosen one, or - 1.4.0-r5 - the default
-     * (Gemini 3.1 Flash-Lite when the key can see it) rather than simply the
-     * first discovered id, which was the newest and lowest-allowance model.
-     */
     val effectiveModel: String
         get() = model.ifBlank {
             AiModelPolicy.pickDefaultId(discoveredModels)
@@ -87,14 +60,28 @@ data class AiSettings(
 /** Persists [AiSettings]; the key itself goes to the Keystore-sealed vault. */
 class GeminiStore(private val context: Context) {
 
+    enum class StorageError {
+        KEY_UNAVAILABLE,
+        CORRUPT_DATA,
+        STORAGE_FAILURE,
+        MISSING_KEY,
+    }
+
+    sealed interface SettingsResult {
+        data class Available(val settings: AiSettings) : SettingsResult
+        data class Failed(val error: StorageError) : SettingsResult
+    }
+
+    sealed interface OperationResult {
+        data object Success : OperationResult
+        data class Failed(val error: StorageError) : OperationResult
+    }
+
     private object Keys {
         val model = stringPreferencesKey("model")
         val models = stringPreferencesKey("models")
         val modelUserPicked = booleanPreferencesKey("modelUserPicked")
-        // 1.4.0-r5: a NEW key name. The old "autoOptimize" key defaulted to ON, so
-        // every existing install has it stored as true without the user ever
-        // having chosen it. Reading a fresh key makes the new default (OFF) apply
-        // to everyone once; from then on the user's own choice is stored here.
+        // New key name: the old key defaulted to ON for existing installs.
         val autoOptimize = booleanPreferencesKey("autoOptimize_v2")
         val autoApply = booleanPreferencesKey("autoApply")
         val showHints = booleanPreferencesKey("showHints")
@@ -102,64 +89,121 @@ class GeminiStore(private val context: Context) {
 
     private val secrets = SecretStore(context)
 
-    val settings: Flow<AiSettings> = context.aiDataStore.data.map { prefs ->
-        AiSettings(
-            apiKey = secrets.read(SecretStore.GEMINI_KEY),
-            model = prefs[Keys.model] ?: "",
-            discoveredModels = prefs[Keys.models]
-                ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList(),
-            modelUserPicked = prefs[Keys.modelUserPicked] ?: false,
-            autoOptimize = prefs[Keys.autoOptimize] ?: false,
-            autoApply = prefs[Keys.autoApply] ?: false,
-            showHints = prefs[Keys.showHints] ?: true,
-        )
-    }
+    /**
+     * A failed Keystore read is a failed settings load, never an empty/missing key.
+     * The caller can therefore fail closed instead of attempting an AI request.
+     */
+    val settings: Flow<SettingsResult> = context.aiDataStore.data
+        .map { prefs ->
+            when (val key = secrets.readResult(SecretStore.GEMINI_KEY)) {
+                SecretStore.ReadResult.Missing -> SettingsResult.Available(
+                    prefs.toAiSettings(apiKey = ""),
+                )
+                is SecretStore.ReadResult.Value -> SettingsResult.Available(
+                    prefs.toAiSettings(apiKey = key.value),
+                )
+                is SecretStore.ReadResult.KeyUnavailable ->
+                    SettingsResult.Failed(StorageError.KEY_UNAVAILABLE)
+                is SecretStore.ReadResult.CorruptData ->
+                    SettingsResult.Failed(StorageError.CORRUPT_DATA)
+                is SecretStore.ReadResult.StorageFailure ->
+                    SettingsResult.Failed(StorageError.STORAGE_FAILURE)
+            }
+        }
+        .catch { error ->
+            if (error is CancellationException) throw error
+            emit(SettingsResult.Failed(StorageError.STORAGE_FAILURE))
+        }
 
     /**
-     * Stores the key sealed with an AES-GCM key managed by Android Keystore.
-     * Hardware backing, when available, is device-dependent and not guaranteed.
-     *
-     * Trimmed first: an API key pasted from a web page almost always arrives with
-     * a trailing newline or a stray space, and a key with whitespace in it fails
-     * authentication with a 400 that says nothing useful about why.
+     * Save the secret first. No model preference is touched unless the encrypted
+     * write/clear succeeds. A changed key invalidates only its model selection/cache.
      */
-    suspend fun saveKey(key: String) {
+    suspend fun saveKey(key: String): OperationResult {
         val trimmed = key.trim()
-        val previous = secrets.read(SecretStore.GEMINI_KEY)
-        secrets.write(SecretStore.GEMINI_KEY, trimmed)
-        // 1.4.0-r5: a different key starts on the default model (3.1 Flash-Lite).
-        if (trimmed != previous) resetModelChoice()
-        // Touch the store so the settings flow re-emits: the key lives outside
-        // DataStore, so nothing else would tell a collector it changed.
-        context.aiDataStore.edit { it[Keys.model] = it[Keys.model] ?: "" }
+        if (trimmed.isBlank()) return forget()
+
+        val previous = when (val result = secrets.readResult(SecretStore.GEMINI_KEY)) {
+            SecretStore.ReadResult.Missing -> ""
+            is SecretStore.ReadResult.Value -> result.value
+            is SecretStore.ReadResult.KeyUnavailable ->
+                return OperationResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.ReadResult.CorruptData ->
+                return OperationResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.ReadResult.StorageFailure ->
+                return OperationResult.Failed(StorageError.STORAGE_FAILURE)
+        }
+
+        when (val result = secrets.writeResult(SecretStore.GEMINI_KEY, trimmed)) {
+            SecretStore.WriteResult.Saved -> Unit
+            SecretStore.WriteResult.Cleared -> return OperationResult.Failed(StorageError.STORAGE_FAILURE)
+            is SecretStore.WriteResult.KeyUnavailable ->
+                return OperationResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.WriteResult.CorruptData ->
+                return OperationResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.WriteResult.StorageFailure ->
+                return OperationResult.Failed(StorageError.STORAGE_FAILURE)
+        }
+
+        return try {
+            if (trimmed != previous) {
+                context.aiDataStore.edit { prefs ->
+                    prefs[Keys.model] = ""
+                    prefs[Keys.models] = ""
+                    prefs[Keys.modelUserPicked] = false
+                }
+            } else {
+                // Touch DataStore so settings collectors can observe the secret update.
+                context.aiDataStore.edit { prefs ->
+                    prefs[Keys.model] = prefs[Keys.model] ?: ""
+                }
+            }
+            OperationResult.Success
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            OperationResult.Failed(StorageError.STORAGE_FAILURE)
+        }
     }
+
+    private suspend fun requireReadableKey(): OperationResult? =
+        when (val result = secrets.readResult(SecretStore.GEMINI_KEY)) {
+            is SecretStore.ReadResult.Value ->
+                if (result.value.isNotBlank()) null
+                else OperationResult.Failed(StorageError.MISSING_KEY)
+            SecretStore.ReadResult.Missing -> OperationResult.Failed(StorageError.MISSING_KEY)
+            is SecretStore.ReadResult.KeyUnavailable ->
+                OperationResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.ReadResult.CorruptData ->
+                OperationResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.ReadResult.StorageFailure ->
+                OperationResult.Failed(StorageError.STORAGE_FAILURE)
+        }
 
     /**
      * @param byUser true when the user tapped the model in the picker; false for
-     *   the app's own default pick. See [AiSettings.modelUserPicked].
+     *   the app's own default pick.
      */
-    suspend fun saveModel(model: String, byUser: Boolean = true) {
-        context.aiDataStore.edit {
+    suspend fun saveModel(model: String, byUser: Boolean = true): OperationResult {
+        requireReadableKey()?.let { return it }
+        return editPreferences {
             it[Keys.model] = model
             it[Keys.modelUserPicked] = byUser && model.isNotBlank()
         }
     }
 
-    /**
-     * 1.4.0-r5: a newly entered key starts from the default model again. The
-     * previous key's choice (and its cached list) says nothing about what the new
-     * key may use, and a stale pick would skip the default the user was promised.
-     */
-    suspend fun resetModelChoice() {
-        context.aiDataStore.edit { prefs ->
+    /** Reset the selected model and cached discovery list after a successful key write. */
+    suspend fun resetModelChoice(): OperationResult {
+        requireReadableKey()?.let { return it }
+        return editPreferences { prefs ->
             prefs[Keys.model] = ""
             prefs[Keys.models] = ""
             prefs[Keys.modelUserPicked] = false
         }
     }
 
-    suspend fun saveDiscovered(models: List<String>) {
-        context.aiDataStore.edit { it[Keys.models] = models.joinToString(",") }
+    suspend fun saveDiscovered(models: List<String>): OperationResult {
+        requireReadableKey()?.let { return it }
+        return editPreferences { it[Keys.models] = models.joinToString(",") }
     }
 
     suspend fun saveAutoOptimize(enabled: Boolean) {
@@ -174,13 +218,54 @@ class GeminiStore(private val context: Context) {
         context.aiDataStore.edit { it[Keys.showHints] = enabled }
     }
 
-    /** Forgets the key, the model choice and the cached model list. */
-    suspend fun forget() {
-        secrets.write(SecretStore.GEMINI_KEY, "")
-        context.aiDataStore.edit { prefs ->
-            prefs[Keys.model] = ""
-            prefs[Keys.models] = ""
-            prefs[Keys.modelUserPicked] = false
+    /**
+     * The key is cleared first. Model preferences are erased only after the
+     * encrypted vault confirms the clear, so a failed clear preserves the config.
+     */
+    suspend fun forget(): OperationResult {
+        when (val result = secrets.clearResult(SecretStore.GEMINI_KEY)) {
+            SecretStore.WriteResult.Cleared -> Unit
+            SecretStore.WriteResult.Saved -> return OperationResult.Failed(StorageError.STORAGE_FAILURE)
+            is SecretStore.WriteResult.KeyUnavailable ->
+                return OperationResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.WriteResult.CorruptData ->
+                return OperationResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.WriteResult.StorageFailure ->
+                return OperationResult.Failed(StorageError.STORAGE_FAILURE)
+        }
+        return try {
+            context.aiDataStore.edit { prefs ->
+                prefs[Keys.model] = ""
+                prefs[Keys.models] = ""
+                prefs[Keys.modelUserPicked] = false
+            }
+            OperationResult.Success
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            OperationResult.Failed(StorageError.STORAGE_FAILURE)
         }
     }
+
+    private suspend fun editPreferences(
+        block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit,
+    ): OperationResult = try {
+        context.aiDataStore.edit(block)
+        OperationResult.Success
+    } catch (error: Throwable) {
+        if (error is CancellationException) throw error
+        OperationResult.Failed(StorageError.STORAGE_FAILURE)
+    }
+
+    private fun androidx.datastore.preferences.core.Preferences.toAiSettings(
+        apiKey: String,
+    ) = AiSettings(
+        apiKey = apiKey,
+        model = this[Keys.model] ?: "",
+        discoveredModels = this[Keys.models]
+            ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList(),
+        modelUserPicked = this[Keys.modelUserPicked] ?: false,
+        autoOptimize = this[Keys.autoOptimize] ?: false,
+        autoApply = this[Keys.autoApply] ?: false,
+        showHints = this[Keys.showHints] ?: true,
+    )
 }
