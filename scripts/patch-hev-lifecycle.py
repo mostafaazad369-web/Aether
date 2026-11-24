@@ -269,4 +269,56 @@ apply(tunnel, [
     ),
 ])
 
+# HEV's public stats API reads plain size_t counters while the tunnel worker
+# updates them and teardown resets them. The API has no caller-visible lock or
+# thread-safety contract. Use compiler atomics for every access so JNI polling
+# cannot race with packet processing or worker teardown (including 32-bit ABIs).
+apply(tunnel, [
+    (
+        "    stat_rx_packets++;\n"
+        "    stat_rx_bytes += s;\n",
+        "    __atomic_fetch_add (&stat_rx_packets, 1, __ATOMIC_RELAXED);\n"
+        "    __atomic_fetch_add (&stat_rx_bytes, (size_t) s, __ATOMIC_RELAXED);\n",
+        "atomic RX statistics",
+    ),
+    (
+        "        stat_tx_packets++;\n"
+        "        stat_tx_bytes += buf->tot_len;\n",
+        "        __atomic_fetch_add (&stat_tx_packets, 1, __ATOMIC_RELAXED);\n"
+        "        __atomic_fetch_add (&stat_tx_bytes, (size_t) buf->tot_len, __ATOMIC_RELAXED);\n",
+        "atomic TX statistics",
+    ),
+    (
+        "    stat_tx_packets = 0;\n"
+        "    stat_rx_packets = 0;\n"
+        "    stat_tx_bytes = 0;\n"
+        "    stat_rx_bytes = 0;\n",
+        "    __atomic_store_n (&stat_tx_packets, 0, __ATOMIC_RELAXED);\n"
+        "    __atomic_store_n (&stat_rx_packets, 0, __ATOMIC_RELAXED);\n"
+        "    __atomic_store_n (&stat_tx_bytes, 0, __ATOMIC_RELAXED);\n"
+        "    __atomic_store_n (&stat_rx_bytes, 0, __ATOMIC_RELAXED);\n",
+        "atomic statistics reset",
+    ),
+    (
+        "        *tx_packets = stat_tx_packets;\n",
+        "        *tx_packets = __atomic_load_n (&stat_tx_packets, __ATOMIC_RELAXED);\n",
+        "atomic TX packet snapshot",
+    ),
+    (
+        "        *tx_bytes = stat_tx_bytes;\n",
+        "        *tx_bytes = __atomic_load_n (&stat_tx_bytes, __ATOMIC_RELAXED);\n",
+        "atomic TX byte snapshot",
+    ),
+    (
+        "        *rx_packets = stat_rx_packets;\n",
+        "        *rx_packets = __atomic_load_n (&stat_rx_packets, __ATOMIC_RELAXED);\n",
+        "atomic RX packet snapshot",
+    ),
+    (
+        "        *rx_bytes = stat_rx_bytes;\n",
+        "        *rx_bytes = __atomic_load_n (&stat_rx_bytes, __ATOMIC_RELAXED);\n",
+        "atomic RX byte snapshot",
+    ),
+])
+
 print("Applied Aether generation-safe HEV lifecycle extension.")
