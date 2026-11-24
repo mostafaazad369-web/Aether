@@ -308,7 +308,6 @@ class ProfileStore(private val context: Context) {
 
         return try {
             context.dataStore.edit { prefs ->
-        context.dataStore.edit { prefs ->
             prefs[Keys.backend] = profile.backend.name
             prefs[Keys.exitRegion] = profile.exitRegion.uppercase()
             prefs[Keys.torBridges] = profile.torBridges.name
