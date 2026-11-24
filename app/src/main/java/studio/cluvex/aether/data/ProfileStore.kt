@@ -399,21 +399,15 @@ class ProfileStore(private val context: Context) {
 
     /** Wipes the sealed Zero Trust secrets (used by "Reset settings"). */
     fun clearSecrets(): OperationResult {
-        val previousSecret = secrets.readResult(SecretStore.ACCESS_SECRET)
-        val previousToken = secrets.readResult(SecretStore.ACCESS_TOKEN)
-        readFailure(previousSecret)?.let { return OperationResult.Failed(it) }
-        readFailure(previousToken)?.let { return OperationResult.Failed(it) }
-
+        // Cleanup is an explicit destructive action: it must still be possible
+        // to remove ciphertext that can no longer be decrypted.
         when (val result = secrets.clearResult(SecretStore.ACCESS_SECRET)) {
             SecretStore.WriteResult.Cleared -> Unit
             else -> return OperationResult.Failed(writeFailure(result))
         }
-        when (val result = secrets.clearResult(SecretStore.ACCESS_TOKEN)) {
+        return when (val result = secrets.clearResult(SecretStore.ACCESS_TOKEN)) {
             SecretStore.WriteResult.Cleared -> OperationResult.Success
-            else -> {
-                restoreSecret(SecretStore.ACCESS_SECRET, previousSecret)
-                OperationResult.Failed(writeFailure(result))
-            }
+            else -> OperationResult.Failed(writeFailure(result))
         }
     }
 
