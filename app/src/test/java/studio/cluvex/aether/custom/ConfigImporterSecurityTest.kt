@@ -103,6 +103,28 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
+    fun `globally reachable IANA assignments inside 2001 slash 23 are accepted exactly`() {
+        listOf(
+            "2001:1::1", "2001:1::2", "2001:1::3",
+            "2001:3::1", "2001:4:112::1",
+            "2001:20::1", "2001:2f::1",
+            "2001:30::1", "2001:3f::1",
+        ).forEach {
+            assertTrue("$it is globally reachable per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
+    fun `unassigned IETF protocol addresses and adjacent non-global prefixes stay rejected`() {
+        listOf(
+            "2001:1::4", "2001:3:1::1", "2001:4:113::1",
+            "2001:10::1", "2001:2::1", "2001:40::1",
+        ).forEach {
+            assertFalse("$it is not a globally reachable IANA exception", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
     fun `a mixed public and private DNS answer is rejected as a whole`() {
         val addresses = listOf(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("127.0.0.1"))
         assertThrows(ConfigImportException::class.java) {

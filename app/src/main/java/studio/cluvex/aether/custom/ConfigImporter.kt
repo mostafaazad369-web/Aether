@@ -168,16 +168,25 @@ object ConfigImporter {
         // Permit global-unicast 2000::/3 only. This excludes ULA, link-local,
         // multicast, discard-only, and other non-global IPv6 address spaces.
         if ((bytes[0] and 0xe0) != 0x20) return false
-        // 2001::/23 is reserved for IETF protocol assignments, except for
-        // the three globally-reachable anycast host addresses registered by IANA.
+        // 2001::/23 is reserved for IETF protocol assignments. Permit only
+        // the more-specific entries marked globally reachable in the IANA registry.
         if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
             bytes[2] == 0x00 && (bytes[3] and 0xfe) == 0x00
         ) {
-            val isRegisteredGlobalAnycast =
+            val isRegisteredGlobalAssignment = when {
+                // PCP, TURN, and DNS-SD anycast addresses (exact /128 hosts).
                 bytes[3] == 0x01 &&
-                    bytes.subList(4, 14).all { it == 0 } &&
-                    bytes[14] == 0 && bytes[15] in 1..3
-            if (!isRegisteredGlobalAnycast) return false
+                    bytes.subList(4, 15).all { it == 0 } &&
+                    bytes[15] in 1..3 -> true
+                // AMT: 2001:3::/32.
+                bytes[3] == 0x03 -> true
+                // AS112-v6: 2001:4:112::/48.
+                bytes[3] == 0x04 && bytes[4] == 0x01 && bytes[5] == 0x12 -> true
+                // ORCHIDv2 and Drone Remote ID DETs: 2001:20::/28 and 2001:30::/28.
+                (bytes[3] and 0xf0) == 0x20 || (bytes[3] and 0xf0) == 0x30 -> true
+                else -> false
+            }
+            if (!isRegisteredGlobalAssignment) return false
         }
         // Deprecated ORCHID (2001:10::/28), benchmarking (2001:2::/48),
         // documentation, and 6to4 are not public subscription destinations.
