@@ -134,9 +134,13 @@ fun SharePanel(
     val proxyPassword by ShareBridge.proxyPassword.collectAsState()
     val lanClients by ShareBridge.lanClients.collectAsState()
 
-    // Load mode / auth / credential before anything is shown. Keystore work.
+    var credentialStorageError by remember { mutableStateOf(false) }
+
+    // Do not enable sharing or expose credentials until the encrypted record is readable.
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) { ShareCredentials.ensure(context) }
+        credentialStorageError = withContext(Dispatchers.IO) {
+            ShareCredentials.ensure(context) != ShareCredentials.EnsureResult.Ready
+        }
     }
 
     // Which modes have a live network right now - refreshed while the card is
@@ -153,7 +157,7 @@ fun SharePanel(
 
     // Self-healing: connected + switch on + LAN side not requested yet.
     LaunchedEffect(state.isConnected, profile.lanShare, bridgeActive, lanStatus) {
-        if (state.isConnected && profile.lanShare && lanStatus == ShareBridge.LanStatus.OFF) {
+        if (!credentialStorageError && state.isConnected && profile.lanShare && lanStatus == ShareBridge.LanStatus.OFF) {
             withContext(Dispatchers.IO) { ShareBridge.enableLan() }
         }
     }
@@ -210,6 +214,10 @@ fun SharePanel(
                     Divider()
                     Spacer(Modifier.height(4.dp))
 
+                    if (credentialStorageError) {
+                        Notice(Icons.Rounded.WarningAmber, stringResource(R.string.share_credentials_storage_error), MaterialTheme.colorScheme.error)
+                    }
+
                     // ---- master switch ------------------------------------
                     SwitchLine(
                         topic = AiTopic.SHARE,
@@ -217,6 +225,7 @@ fun SharePanel(
                         summary = stringResource(R.string.share_toggle_desc),
                         checked = profile.lanShare,
                         onChange = { on ->
+                            if (credentialStorageError && on) return@SwitchLine
                             onProfileChange(profile.copy(lanShare = on))
                             if (state.isConnected) {
                                 if (on) {
@@ -320,8 +329,13 @@ fun SharePanel(
                         },
                         onRotate = {
                             scope.launch {
-                                withContext(Dispatchers.IO) { ShareCredentials.rotate(context) }
-                                Toast.makeText(context, R.string.share_pass_rotated, Toast.LENGTH_SHORT).show()
+                                val result = withContext(Dispatchers.IO) { ShareCredentials.rotate(context) }
+                                Toast.makeText(
+                                    context,
+                                    if (result == ShareCredentials.OperationResult.SUCCESS) R.string.share_pass_rotated
+                                    else R.string.share_credentials_storage_error,
+                                    Toast.LENGTH_SHORT,
+                                ).show()
                             }
                         },
                     )
@@ -608,6 +622,7 @@ private fun AuthSection(
                             }
                             ShareCredentials.Validation.BAD_USER -> error = badUser
                             ShareCredentials.Validation.SHORT_PASSWORD -> error = shortPass
+                            ShareCredentials.Validation.STORAGE_FAILURE -> error = context.getString(R.string.share_credentials_storage_error)
                         }
                     }
                 }) { Text(stringResource(R.string.share_auth_save)) }

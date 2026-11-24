@@ -1027,4 +1027,5 @@
     <string name="no_ticket_desc">Leave out the session_ticket extension.</string>
     <string name="no_perm_title">Disable extension permutation</string>
     <string name="no_perm_desc">Keep one fixed order of the extensions instead of Chrome\'s per-handshake shuffle.</string>
+    <string name="share_credentials_storage_error">Saved sharing credentials cannot be read or safely updated. Sharing remains disabled until the device storage issue is resolved.</string>
 </resources>

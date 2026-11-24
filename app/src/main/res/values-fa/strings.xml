@@ -997,4 +997,5 @@
     <string name="no_ticket_desc">افزونهٔ ⁨session_ticket⁩ حذف می‌شود.</string>
     <string name="no_perm_title">غیرفعال‌کردن جابه‌جایی افزونه‌ها</string>
     <string name="no_perm_desc">به‌جای جابه‌جایی تصادفی ⁨Chrome⁩ در هر دست‌دهی، ترتیب افزونه‌ها ثابت می‌ماند.</string>
+    <string name="share_credentials_storage_error">اطلاعات رمزنگاری‌شدهٔ اشتراک‌گذاری قابل خواندن یا به‌روزرسانی امن نیست. تا رفع مشکل ذخیره‌سازی دستگاه، اشتراک‌گذاری غیرفعال می‌ماند.</string>
 </resources>

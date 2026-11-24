@@ -1,58 +1,69 @@
 package studio.cluvex.aether.data
 
 import android.content.Context
+import android.util.Base64
+import org.json.JSONObject
 import studio.cluvex.aether.core.LanGuard
 import studio.cluvex.aether.core.ShareBridge
 import studio.cluvex.aether.core.ShareLeakGuard
 
 /**
- * VPN-sharing preferences and credential (1.4.0-r5).
- *
- *  - **Mode** (Home Wi-Fi / Mobile-data hotspot) and **authentication on/off**
- *    are plain preferences - neither is a secret.
- *  - **Username + password** live in [SecretStore] (AES-256-GCM under a
- *    non-exportable Android Keystore key), never in a plain preferences file.
- *
- * Authentication is OPTIONAL and off by default (1.4.0-r5): the user turns it on
- * when they want it. A strong password is still generated on first use, so
- * turning it on is one tap, and the user may replace the username/password
- * with their own (validated in [setCustom]).
- *
- * Everything is pushed into [ShareBridge] by [ensure], which is idempotent and
- * called at process start and before any code path that binds the LAN.
+ * Encrypted VPN-sharing credentials. Username/password are stored together as
+ * one authenticated SecretStore value so a partial two-key update cannot leave
+ * a mismatched credential pair behind.
  */
 object ShareCredentials {
-
-    /** Default username. */
     const val USER = ShareBridge.DEFAULT_USER
-
-    /** Minimum length of a user-chosen password. */
     const val MIN_PASSWORD = 8
 
-    /**
-     * Loads mode, auth flag and credential (minting a password once) and hands
-     * them to [ShareBridge]. Returns the password.
-     */
-    fun ensure(context: Context): String {
-        // r6: lets the bridge ask Android which interfaces are upstream networks
-        // (so tethering downstreams are recognised on every vendor's naming).
+    sealed interface EnsureResult {
+        data object Ready : EnsureResult
+        data object StorageFailure : EnsureResult
+    }
+
+    enum class Validation { OK, BAD_USER, SHORT_PASSWORD, STORAGE_FAILURE }
+    enum class OperationResult { SUCCESS, STORAGE_FAILURE }
+
+    fun ensure(context: Context): EnsureResult {
         ShareBridge.attach(context)
         val prefs = prefs(context)
         val modeName = prefs.getString(PREF_MODE, null)
         val mode = ShareLeakGuard.Mode.entries.firstOrNull { it.name == modeName }
             ?: ShareLeakGuard.Mode.HOME_WIFI
-        ShareBridge.setMode(mode)
-
         val store = SecretStore(context)
-        val user = store.read(KEY_USER).ifBlank { USER }
-        var password = store.read(KEY_PASSWORD)
-        if (password.isBlank()) {
-            password = LanGuard.randomPassword()
-            store.write(KEY_PASSWORD, password)
+
+        val credentials = when (val result = store.readResult(KEY_CREDENTIALS)) {
+            is SecretStore.ReadResult.Value -> decode(result.value) ?: return EnsureResult.StorageFailure
+            SecretStore.ReadResult.Missing -> {
+                val legacyUser = when (val value = store.readResult(KEY_USER)) {
+                    SecretStore.ReadResult.Missing -> USER
+                    is SecretStore.ReadResult.Value -> value.value.takeIf { it.isNotBlank() }
+                        ?: return EnsureResult.StorageFailure
+                    else -> return EnsureResult.StorageFailure
+                }
+                val legacyPassword = when (val value = store.readResult(KEY_PASSWORD)) {
+                    SecretStore.ReadResult.Missing -> LanGuard.randomPassword()
+                    is SecretStore.ReadResult.Value -> value.value.takeIf { it.isNotBlank() }
+                        ?: return EnsureResult.StorageFailure
+                    else -> return EnsureResult.StorageFailure
+                }
+                Credentials(legacyUser, legacyPassword).also {
+                    if (store.writeResult(KEY_CREDENTIALS, encode(it)) != SecretStore.WriteResult.Saved) {
+                        return EnsureResult.StorageFailure
+                    }
+                    // The new pair is durable before legacy values are removed.
+                    if (store.clearResult(KEY_USER) != SecretStore.WriteResult.Cleared ||
+                        store.clearResult(KEY_PASSWORD) != SecretStore.WriteResult.Cleared
+                    ) return EnsureResult.StorageFailure
+                }
+            }
+            else -> return EnsureResult.StorageFailure
         }
-        ShareBridge.setCredentials(user, password)
+
+        ShareBridge.setMode(mode)
+        ShareBridge.setCredentials(credentials.user, credentials.password)
         ShareBridge.setAuthRequired(prefs.getBoolean(PREF_AUTH, false))
-        return password
+        return EnsureResult.Ready
     }
 
     fun setMode(context: Context, mode: ShareLeakGuard.Mode) {
@@ -65,15 +76,6 @@ object ShareCredentials {
         ShareBridge.setAuthRequired(required)
     }
 
-    /** Result of [setCustom]. */
-    enum class Validation { OK, BAD_USER, SHORT_PASSWORD }
-
-    /**
-     * Stores a user-chosen username/password. The username must be 1-64
-     * printable ASCII characters without ':' (it travels in HTTP Basic, where
-     * ':' separates the fields); the password at least [MIN_PASSWORD] chars and
-     * at most 128 (RFC 1929 carries at most 255 bytes).
-     */
     fun setCustom(context: Context, user: String, password: String): Validation {
         val u = user.trim()
         if (u.isEmpty() || u.length > 64 || u.any { it == ':' || it.code !in 0x21..0x7E }) {
@@ -81,31 +83,49 @@ object ShareCredentials {
         }
         if (password.length < MIN_PASSWORD || password.length > 128 ||
             password.any { it.code !in 0x20..0x7E }
-        ) {
-            return Validation.SHORT_PASSWORD
+        ) return Validation.SHORT_PASSWORD
+
+        val credentials = Credentials(u, password)
+        if (SecretStore(context).writeResult(KEY_CREDENTIALS, encode(credentials)) != SecretStore.WriteResult.Saved) {
+            return Validation.STORAGE_FAILURE
         }
-        val store = SecretStore(context)
-        store.write(KEY_USER, u)
-        store.write(KEY_PASSWORD, password)
         ShareBridge.setCredentials(u, password)
         return Validation.OK
     }
 
-    /**
-     * Replaces the password with a fresh random one. Existing sessions keep
-     * running; nothing new can attach with the old password.
-     */
-    fun rotate(context: Context): String {
-        val fresh = LanGuard.randomPassword()
-        SecretStore(context).write(KEY_PASSWORD, fresh)
-        ShareBridge.setCredentials(ShareBridge.proxyUser.value, fresh)
-        return fresh
+    fun rotate(context: Context): OperationResult {
+        val store = SecretStore(context)
+        val current = when (val result = store.readResult(KEY_CREDENTIALS)) {
+            is SecretStore.ReadResult.Value -> decode(result.value) ?: return OperationResult.STORAGE_FAILURE
+            else -> return OperationResult.STORAGE_FAILURE
+        }
+        val fresh = current.copy(password = LanGuard.randomPassword())
+        if (store.writeResult(KEY_CREDENTIALS, encode(fresh)) != SecretStore.WriteResult.Saved) {
+            return OperationResult.STORAGE_FAILURE
+        }
+        ShareBridge.setCredentials(fresh.user, fresh.password)
+        return OperationResult.SUCCESS
     }
+
+    private data class Credentials(val user: String, val password: String)
+
+    private fun encode(value: Credentials): String = JSONObject()
+        .put("user", value.user)
+        .put("password", value.password)
+        .toString()
+
+    private fun decode(value: String): Credentials? = runCatching {
+        val json = JSONObject(value)
+        val user = json.getString("user")
+        val password = json.getString("password")
+        require(user.isNotBlank() && password.isNotBlank())
+        Credentials(user, password)
+    }.getOrNull()
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
 
-    /** Same secret key name as r4, so an existing password carries over. */
+    private const val KEY_CREDENTIALS = "share_proxy_credentials_v2"
     private const val KEY_PASSWORD = "share_proxy_password"
     private const val KEY_USER = "share_proxy_user"
     private const val PREFS_FILE = "aether_share"
