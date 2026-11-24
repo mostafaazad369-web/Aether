@@ -159,6 +159,7 @@ class ConfigImporterSecurityTest {
             "2001:3::1", "2001:4:112::1",
             "2001:20::1", "2001:2f::1",
             "2001:30::1", "2001:3f::1",
+            "2620:4f:8000::1", // Direct Delegation AS112 Service
         ).forEach {
             assertTrue("$it is globally reachable per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
