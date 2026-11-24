@@ -312,4 +312,40 @@ class ConfigImporterSecurityTest {
         }
     }
 
+
+    @Test
+    fun `direct client DNS wrapper validates and pins one complete answer set`() {
+        val expected = listOf(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("8.8.8.8"))
+        val lookups = java.util.concurrent.atomic.AtomicInteger()
+        val upstreamDns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                lookups.incrementAndGet()
+                return expected
+            }
+        }
+
+        val client = ConfigImporter.createSubscriptionHttpClient(null, upstreamDns)
+        val resolved = client.dns.lookup("subscription.example.net")
+
+        assertTrue("the validated resolver result must be the exact pinned address list", resolved === expected)
+        assertEquals("one resolver lookup supplies the complete validated route set", 1, lookups.get())
+    }
+
+    @Test
+    fun `direct client DNS wrapper rejects mixed public and private answers before connect`() {
+        val mixed = listOf(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("127.0.0.1"))
+        val lookups = java.util.concurrent.atomic.AtomicInteger()
+        val upstreamDns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                lookups.incrementAndGet()
+                return mixed
+            }
+        }
+
+        val client = ConfigImporter.createSubscriptionHttpClient(null, upstreamDns)
+        assertThrows(java.net.UnknownHostException::class.java) {
+            client.dns.lookup("subscription.example.net")
+        }
+        assertEquals("mixed answers must be rejected in the actual OkHttp DNS adapter", 1, lookups.get())
+    }
 }
