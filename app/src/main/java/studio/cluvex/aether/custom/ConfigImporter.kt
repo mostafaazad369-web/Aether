@@ -198,6 +198,7 @@ object ConfigImporter {
             0xc6336400L to 24,  // documentation
             0xcb007100L to 24,  // documentation
             0xe0000000L to 4,   // multicast and reserved
+            0xf0000000L to 4,   // reserved for future use and limited broadcast
         )
         return blocked.none { (network, prefix) -> inRange(network, prefix) }
     }
