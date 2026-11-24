@@ -3208,11 +3208,14 @@ class AetherVpnService : VpnService() {
             }
         } catch (_: Throwable) {
         }
-        try {
-            engine?.stop()
-        } catch (_: Throwable) {
+        stopTrackedRaceEngines()
+        stopTrackedRaceEngines()
+        val currentEngine = engine
+        if (currentEngine == null || runCatching { currentEngine.stop() }.getOrDefault(false)) {
+            engine = null
+        } else {
+            DiagnosticsLog.e(TAG, "Cleanup could not confirm engine exit; retaining its reference and identity lease.")
         }
-        engine = null
         try {
             tun?.close()
         } catch (_: Throwable) {
