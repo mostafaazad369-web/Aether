@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -149,6 +150,16 @@ object AiSession {
     private val _settings = MutableStateFlow(AiSettings())
     val settings: StateFlow<AiSettings> = _settings.asStateFlow()
 
+    private val _storageError = MutableStateFlow<GeminiStore.StorageError?>(null)
+    val storageError: StateFlow<GeminiStore.StorageError?> = _storageError.asStateFlow()
+
+    private val _forgetResult = MutableStateFlow<ForgetResult?>(null)
+    val forgetResult: StateFlow<ForgetResult?> = _forgetResult.asStateFlow()
+
+    private val _keySaving = MutableStateFlow(false)
+
+    enum class ForgetResult { SUCCESS, FAILURE }
+
     private val _models = MutableStateFlow<List<GeminiModel>>(emptyList())
     val models: StateFlow<List<GeminiModel>> = _models.asStateFlow()
 
@@ -197,18 +208,24 @@ object AiSession {
         val created = GeminiStore(context.applicationContext)
         store = created
         scope.launch {
-            created.settings.collect { loaded ->
-                _settings.value = loaded
-                // Keep the picker populated from the cache while offline, so the
-                // model list is never mysteriously empty after a restart.
-                if (_models.value.isEmpty() && loaded.discoveredModels.isNotEmpty()) {
-                    // Filtered on the way OUT of the cache as well as on the way in.
-                    // A cache written by 1.2.8 holds the unfiltered list, and
-                    // replaying it would put image and pro models back in the
-                    // picker on first launch after the update - the filter has to
-                    // hold on every path, not just on refresh. See [AiModelPolicy].
-                    _models.value = AiModelPolicy.filterIds(loaded.discoveredModels).map {
-                        GeminiModel(it, it, "", 0, 0, chatCapable = true)
+            created.settings.collect { result ->
+                if (_keySaving.value) return@collect
+                when (result) {
+                    is GeminiStore.SettingsResult.Available -> {
+                        _settings.value = result.settings
+                        _storageError.value = null
+                        // Keep the picker populated from the cache while offline.
+                        if (_models.value.isEmpty() && result.settings.discoveredModels.isNotEmpty()) {
+                            _models.value = AiModelPolicy.filterIds(result.settings.discoveredModels).map {
+                                GeminiModel(it, it, "", 0, 0, chatCapable = true)
+                            }
+                        }
+                    }
+                    is GeminiStore.SettingsResult.Failed -> {
+                        // Fail closed: never leave a previously loaded key usable.
+                        _settings.update { it.copy(apiKey = "") }
+                        _models.value = emptyList()
+                        _storageError.value = result.error
                     }
                 }
             }
@@ -229,32 +246,48 @@ object AiSession {
      */
     fun setKey(key: String) {
         val trimmed = key.trim()
-        _probe.value = AiProbe.Idle
-        _settings.update { current ->
-            val changed = trimmed != current.apiKey
-            current.copy(
-                apiKey = trimmed,
-                model = if (changed) "" else current.model,
-                discoveredModels = if (changed) emptyList() else current.discoveredModels,
-                modelUserPicked = if (changed) false else current.modelUserPicked,
-            )
-        }
         keySaveJob?.cancel()
-        if (trimmed.isBlank()) {
-            keySaveJob = scope.launch {
-                store?.forget()
-                _models.value = emptyList()
-            }
-            return
-        }
+        _forgetResult.value = null
+        _storageError.value = null
+        // A draft is not a credential: disable all requests until the write commits.
+        _settings.update { it.copy(apiKey = "") }
+        _keySaving.value = true
         keySaveJob = scope.launch {
             kotlinx.coroutines.delay(KEY_SAVE_DEBOUNCE_MS)
-            store?.saveKey(trimmed)
+            val target = store
+            val result = target?.saveKey(trimmed)
+                ?: GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE)
+            when (result) {
+                GeminiStore.OperationResult.Success -> {
+                    when (val loaded = target.settings.first()) {
+                        is GeminiStore.SettingsResult.Available -> {
+                            _settings.value = loaded.settings
+                            _storageError.value = null
+                            if (trimmed.isBlank()) clearAiSessionData()
+                        }
+                        is GeminiStore.SettingsResult.Failed -> {
+                            _settings.update { it.copy(apiKey = "") }
+                            _storageError.value = loaded.error
+                        }
+                    }
+                }
+                is GeminiStore.OperationResult.Failed -> {
+                    _settings.update { it.copy(apiKey = "") }
+                    _storageError.value = result.error
+                }
+            }
+            _keySaving.value = false
         }
     }
 
     fun setModel(id: String) {
-        scope.launch { store?.saveModel(id, byUser = true) }
+        scope.launch {
+            when (val result = store?.saveModel(id, byUser = true)) {
+                GeminiStore.OperationResult.Success -> _storageError.value = null
+                is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
+                null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+            }
+        }
     }
 
     fun setAutoOptimize(enabled: Boolean) {
@@ -271,18 +304,46 @@ object AiSession {
 
     fun forget() {
         keySaveJob?.cancel()
-        _settings.update {
-            it.copy(apiKey = "", model = "", discoveredModels = emptyList(), modelUserPicked = false)
-        }
+        _keySaving.value = true
+        _forgetResult.value = null
+        _storageError.value = null
+        // Block requests while the clear is pending; do not claim success yet.
+        _settings.update { it.copy(apiKey = "") }
         scope.launch {
-            store?.forget()
-            _models.value = emptyList()
-            _probe.value = AiProbe.Idle
-            _advice.value = AiAdviceState.Idle
-            _messages.value = emptyList()
-            _queuedQuestion.value = null
-            explainCache.clear()
+            val target = store
+            val result = target?.forget()
+                ?: GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE)
+            when (result) {
+                GeminiStore.OperationResult.Success -> {
+                    _settings.update {
+                        it.copy(apiKey = "", model = "", discoveredModels = emptyList(), modelUserPicked = false)
+                    }
+                    clearAiSessionData()
+                    _storageError.value = null
+                    _forgetResult.value = ForgetResult.SUCCESS
+                }
+                is GeminiStore.OperationResult.Failed -> {
+                    _storageError.value = result.error
+                    // If the vault still has a readable key, restore it; otherwise stay fail-closed.
+                    when (val loaded = target?.settings?.first()) {
+                        is GeminiStore.SettingsResult.Available -> _settings.value = loaded.settings
+                        is GeminiStore.SettingsResult.Failed -> _storageError.value = loaded.error
+                        null -> Unit
+                    }
+                    _forgetResult.value = ForgetResult.FAILURE
+                }
+            }
+            _keySaving.value = false
         }
+    }
+
+    private fun clearAiSessionData() {
+        _models.value = emptyList()
+        _probe.value = AiProbe.Idle
+        _advice.value = AiAdviceState.Idle
+        _messages.value = emptyList()
+        _queuedQuestion.value = null
+        explainCache.clear()
     }
 
     // ---- gate ------------------------------------------------------------
@@ -334,7 +395,11 @@ object AiSession {
                     // is cheap and means this stays correct if the client ever
                     // stops doing it.
                     _models.value = AiModelPolicy.filter(result.value)
-                    store?.saveDiscovered(_models.value.map { it.id })
+                    when (val saved = store?.saveDiscovered(_models.value.map { it.id })) {
+                        GeminiStore.OperationResult.Success -> _storageError.value = null
+                        is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
+                        null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                    }
                     // 1.4.0-r5: the app's own pick (not a deliberate user choice)
                     // always follows the default policy - Gemini 3.1 Flash-Lite
                     // first, for its higher free daily allowance. A model the USER
@@ -343,7 +408,11 @@ object AiSession {
                     if (current.model.isBlank() || !chosenStillOffered || !current.modelUserPicked) {
                         AiModelPolicy.pickDefault(_models.value)?.let {
                             if (it != current.model || current.modelUserPicked) {
-                                store?.saveModel(it, byUser = false)
+                                when (val saved = store?.saveModel(it, byUser = false)) {
+                                    GeminiStore.OperationResult.Success -> _storageError.value = null
+                                    is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
+                                    null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                                }
                             }
                         }
                     }
