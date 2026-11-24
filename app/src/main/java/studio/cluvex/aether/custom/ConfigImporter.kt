@@ -168,11 +168,14 @@ object ConfigImporter {
         // Permit global-unicast 2000::/3 only. This excludes ULA, link-local,
         // multicast, discard-only, and other non-global IPv6 address spaces.
         if ((bytes[0] and 0xe0) != 0x20) return false
-        // IETF special-purpose/documentation ranges and 6to4 are not destinations.
+        // IETF protocol assignments (2001::/23), documentation, and 6to4
+        // are not subscription destinations.
         if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
-            (bytes[2] == 0x00 || (bytes[2] == 0x0d && bytes[3] == 0xb8))
+            (bytes[2] <= 0x01 || (bytes[2] == 0x0d && bytes[3] == 0xb8))
         ) return false
         if (bytes[0] == 0x20 && bytes[1] == 0x02) return false
+        // The 3fff::/20 documentation block is inside 2000::/3.
+        if (bytes[0] == 0x3f && (bytes[1] and 0xf0) == 0xf0) return false
         return true
     }
 
