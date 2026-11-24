@@ -4,6 +4,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import java.net.InetAddress
+import java.net.Inet6Address
 import org.junit.Test
 import java.net.URL
 
@@ -40,9 +41,43 @@ class ConfigImporterSecurityTest {
             "2002:0808:0808::1",
             "3fff::1",
             "3fff:0fff::1",
+            "5f00::1",
         ).forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
+    }
+
+    @Test
+    fun `IPv6 documentation prefix is limited to its exact IANA slash 20`() {
+        assertFalse(ConfigImporter.isPublicInternetAddress(InetAddress.getByName("3fff:0fff::1")))
+        assertTrue(
+            "3fff:1000::1 is outside the 3fff::/20 documentation block",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("3fff:1000::1")),
+        )
+    }
+
+    @Test
+    fun `NAT64 local-use is rejected and well-known NAT64 checks its embedded IPv4`() {
+        assertFalse(ConfigImporter.isPublicInternetAddress(InetAddress.getByName("64:ff9b:1::808:808")))
+        assertTrue(ConfigImporter.isPublicInternetAddress(InetAddress.getByName("64:ff9b::101:101")))
+        assertFalse(ConfigImporter.isPublicInternetAddress(InetAddress.getByName("64:ff9b::7f00:1")))
+    }
+
+    @Test
+    fun `IPv4-mapped IPv6 addresses inherit the embedded IPv4 policy`() {
+        fun mapped(a: Int, b: Int, c: Int, d: Int): Inet6Address {
+            val bytes = ByteArray(16).apply {
+                this[10] = 0xff.toByte()
+                this[11] = 0xff.toByte()
+                this[12] = a.toByte()
+                this[13] = b.toByte()
+                this[14] = c.toByte()
+                this[15] = d.toByte()
+            }
+            return Inet6Address.getByAddress(null, bytes, -1)
+        }
+        assertTrue(ConfigImporter.isPublicInternetAddress(mapped(1, 1, 1, 1)))
+        assertFalse(ConfigImporter.isPublicInternetAddress(mapped(127, 0, 0, 1)))
     }
 
     @Test

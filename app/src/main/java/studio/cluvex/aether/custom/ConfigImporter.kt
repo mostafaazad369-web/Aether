@@ -193,7 +193,9 @@ object ConfigImporter {
         ) return false
         if (bytes[0] == 0x20 && bytes[1] == 0x02) return false
         // The 3fff::/20 documentation block is inside 2000::/3.
-        if (bytes[0] == 0x3f && (bytes[1] and 0xf0) == 0xf0) return false
+        if (bytes[0] == 0x3f && bytes[1] == 0xff && (bytes[2] and 0xf0) == 0x00) return false
+        // Segment Routing SIDs (5f00::/16) are not globally reachable.
+        if (bytes[0] == 0x5f && bytes[1] == 0x00) return false
         return true
     }
 
