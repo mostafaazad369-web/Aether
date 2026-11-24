@@ -31,7 +31,7 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
-    fun `IANA PCP and TURN anycast exceptions are accepted()` {
+    fun `IANA PCP and TURN anycast exceptions are accepted`() {
         assertTrue(
             "192.0.0.9 is the globally reachable PCP Anycast address",
             ConfigImporter.isPublicInternetAddress(InetAddress.getByName("192.0.0.9")),
@@ -43,7 +43,7 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
-    fun `other non-global IANA addresses in reserved range remain rejected()` {
+    fun `other non-global IANA addresses in reserved range remain rejected`() {
         listOf("192.0.0.8", "192.0.0.170", "192.0.0.171", "192.0.0.11", "192.0.0.255").forEach {
             assertFalse("$it must remain non-global per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
