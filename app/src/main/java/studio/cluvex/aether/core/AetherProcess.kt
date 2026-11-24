@@ -173,7 +173,6 @@ class AetherProcess(
 
         val proc = builder.start()
         process = proc
-        IdentityVault.markRunning(true)
         // ZERO TRUST (1.3.1, issue #12): hand the engine's stdin to the login-code
         // prompt. Nothing in the app had ever written to it, which is why the
         // e-mail enrolment path could not work - the engine asks for the code on
@@ -336,7 +335,7 @@ class AetherProcess(
      * plaintext. Sealing when the first of them is reaped would therefore pull the
      * WARP identity and the WireGuard private key out from under the engine that
      * is still connecting - not a slow path but a broken session and a device that
-     * has to enrol again. [IdentityVault.markRunning] returns how many are left.
+     * has to enrol again. [IdentityVault.EngineLease] tracks this instance's ownership and returns how many remain.
      */
     private fun releaseEngineLease() {
         val lease = engineLease ?: return
