@@ -42,20 +42,25 @@ class AetherProcess(
             // releasing the identity lease, otherwise plaintext could be sealed
             // while a live engine is still writing it.
             val spawned = process
-            process = null
-            if (spawned != null) {
-                runCatching {
-                    spawned.destroy()
-                    if (!spawned.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                        spawned.destroyForcibly()
-                        spawned.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-                    }
-                }
+            if (spawned == null) {
+                // No child was created, so this lease is safe to release.
+                engineLease = null
+                lease.release()
+            } else if (terminateAndReap(spawned)) {
+                process = null
                 reapPsiphonOrphans()
                 LoginCodePrompt.detach()
+                engineLease = null
+                lease.release()
+            } else {
+                // Keep both the Process reference and its lease. A later stop()
+                // can retry reaping; sealing while this child may still be alive
+                // would corrupt the identity files it can still write.
+                DiagnosticsLog.w(
+                    "engine",
+                    "Startup failed and the engine has not been confirmed reaped; retaining its identity lease.",
+                )
             }
-            engineLease = null
-            lease.release()
             throw failure
         }
     }
@@ -306,25 +311,57 @@ class AetherProcess(
             releaseEngineLease()
             return
         }
-        process = null
-        runCatching {
-            proc.destroy()
-            // Give the engine a very short, fixed grace period, then SIGKILL.
-            // Deliberately short: the user is waiting for the button to turn
-            // grey, and the next connect independently waits for the local
-            // proxy port to be released, so nothing depends on a long wait
-            // here.
-            if (!proc.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                proc.destroyForcibly()
-            }
+        // Keep the reference until the OS confirms exit. destroyForcibly() is
+        // only a signal request; it is not proof that the process has been reaped.
+        if (!terminateAndReap(proc)) {
+            DiagnosticsLog.w(
+                "engine",
+                "Engine exit is not confirmed after SIGKILL; retaining its process reference and identity lease.",
+            )
+            return
         }
+        process = null
         // The engine's Psiphon child must not outlive it (a SIGKILLed engine
         // cannot reap it) and keep holding its port and a tunnel.
         reapPsiphonOrphans()
-        // The engine is gone, so the identity files are nobody's working set any
-        // more: seal them and shred the plaintext. Done AFTER the reap on purpose -
-        // sealing a file the engine is still writing would race its own save.
+        // The engine is confirmed reaped, so the identity files are nobody's
+        // working set any more: seal them and shred the plaintext.
         releaseEngineLease()
+    }
+
+    /**
+     * Requests termination and confirms OS exit before allowing identity cleanup.
+     * Interrupts are deferred until the bounded wait finishes so cancellation of
+     * the caller cannot skip the reap check.
+     */
+    private fun terminateAndReap(proc: Process): Boolean {
+        runCatching { proc.destroy() }
+        if (waitForExitUninterruptibly(proc, GRACEFUL_EXIT_MS)) return true
+
+        runCatching { proc.destroyForcibly() }
+        return waitForExitUninterruptibly(proc, FORCED_EXIT_CONFIRM_MS)
+    }
+
+    private fun waitForExitUninterruptibly(proc: Process, timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() +
+            java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        var interrupted = false
+        try {
+            while (true) {
+                val remainingNanos = deadline - System.nanoTime()
+                if (remainingNanos <= 0L) return !proc.isAlive
+                try {
+                    if (proc.waitFor(remainingNanos, java.util.concurrent.TimeUnit.NANOSECONDS)) {
+                        return true
+                    }
+                    return !proc.isAlive
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
     }
 
     /**
@@ -368,6 +405,8 @@ class AetherProcess(
     private companion object {
         /** How long a polite SIGTERM gets before we escalate to SIGKILL. */
         const val GRACEFUL_EXIT_MS = 250L
+        /** Bounded confirmation window after SIGKILL. */
+        const val FORCED_EXIT_CONFIRM_MS = 2_000L
     }
 
     /**
