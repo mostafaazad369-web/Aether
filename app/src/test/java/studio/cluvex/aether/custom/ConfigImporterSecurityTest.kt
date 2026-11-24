@@ -267,9 +267,11 @@ class ConfigImporterSecurityTest {
         }
 
         try {
-            val dns = okhttp3.Dns { _ ->
-                dnsCalls.incrementAndGet()
-                throw java.net.UnknownHostException("client DNS must not resolve SOCKS targets")
+            val dns = object : okhttp3.Dns {
+                override fun lookup(hostname: String): List<InetAddress> {
+                    dnsCalls.incrementAndGet()
+                    throw java.net.UnknownHostException("client DNS must not resolve SOCKS targets")
+                }
             }
             val client = ConfigImporter.createSubscriptionHttpClient(server.localPort, dns)
             assertThrows(java.io.IOException::class.java) {
