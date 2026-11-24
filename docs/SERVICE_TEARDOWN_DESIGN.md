@@ -1,6 +1,6 @@
 # VPN service teardown: lifecycle findings and safe refactor boundary
 
-Status: a first HEV lifecycle implementation slice is committed; native build and runtime verification remain outstanding.
+Status: the HEV lifecycle patch, three-ABI native build, Kotlin compilation, and JVM unit tests are verified in GitHub Actions run 45449752505; native runtime/concurrency and Android Service teardown verification remain outstanding.
 
 ## Scope inspected
 
@@ -297,3 +297,32 @@ A follow-up workflow, [45138093802](https://github.com/mostafaazad369-web/Aether
 ### Remaining unverified coverage
 
 The successful native build proves compilation and required exported symbols, not live tunnel correctness or race freedom. A host-side deterministic native concurrency harness and device-level lifecycle tests are still outstanding. In particular, test config failure followed by restart, stop during initialization, immediate restart after normal stop, stale generation-N stop after generation N+1 starts, invalid TUN descriptor duplication, and closing the caller's original TUN descriptor while the worker-owned duplicate remains live. The broader process-level Service teardown concerns in this document also remain open.
+
+
+## Verification update — 2026-11-24
+
+### CI result
+
+GitHub Actions run [45449752505](https://github.com/mostafaazad369-web/Aether/actions/runs/45449752505) completed successfully for commit `0d609f120be7b562c0794e4d7e7ce22ee9d01f45`. The run fetched and patched the pinned HEV source, built HEV and the Aether JNI bridge for `arm64-v8a`, `armeabi-v7a`, and `x86_64`, compiled Android Kotlin sources, and completed `:app:testDebugUnitTest` successfully. This verifies build integration and JVM tests, not live-device behavior or native race freedom.
+
+### Follow-up source audit
+
+The following current branch blobs were inspected:
+
+- `AetherVpnService.kt`: `09e2af5e256df3e39886771d94edb2e74376ee1d`
+- `AetherProcess.kt`: `c025e9b1ae49bb95f24ba87fb89a3e1b0169f586`
+- `IdentityVault.kt`: `76372cad214af67d73c3d32803df32b3e0d845a7`
+- `SocksTunBridge.kt`: `e20c779fdccb0637046bba30fc7aff6a462cb8e4`
+- `XrayProcess.kt`: `a00e5b7b36dbd650eaeb0fdd3b24168af64d2f13`
+- `aethertun-jni.c`: `babfbdc5dae1b389ab89c936a2f9a4639d76a7de`
+
+Additional concrete findings:
+
+1. The session-engine paths at the ordinary connect, reconnect, and Psiphon-only start sites assign `engine` only after `AetherProcess.start()` returns. The Smart Plus lane is better ordered: it registers the process in `raceEngines` before calling `start()`, and its `finally` block stops/removes it. However, the service-wide cleanup does not drain `raceEngines` directly, and `onDestroy()` does not join the session job before cancelling the service scope.
+2. `SocksTunBridge` is assigned to `tunBridge` only after `bridge.start()` returns. HEV's `tunnelStarted` flag is likewise set only after the JNI start call returns. Both leave start-in-flight ownership windows.
+3. `AetherProcess.stop()` calls `sealIfLastEngine()` when its `process` field is null. That helper unconditionally calls `IdentityVault.markRunning(false)`. A start failure after identity unsealing but before `ProcessBuilder.start()` has not incremented the running-engine count; decrementing anyway can consume another live Smart Plus lane's count and may seal identity files while that lane still needs them. Replace the unpaired increment/decrement API with a per-instance, idempotent engine lease before relying on this counter for lifecycle safety.
+4. Xray is stored in the service before its initial start, but `startXray()` invokes `runner.start()` outside `xrayLock`; the watchdog restart path does use that lock. Initial startup and teardown therefore still need a shared ownership/serialization contract.
+
+### Implementation boundary
+
+No runtime code was changed in this audit update. Do not treat publishing a handle before `start()`, or adding a standalone mutex, as a complete fix: a stop can still happen before the start call enters the resource itself. The next implementation slice must make resource acquisition cancellable/registrable before side effects, pair each engine's identity lease exactly once, and test failure before spawn, stop during spawn, and concurrent Smart Plus lanes. Keep the broader process-death and Android Service destruction limitations explicit.
