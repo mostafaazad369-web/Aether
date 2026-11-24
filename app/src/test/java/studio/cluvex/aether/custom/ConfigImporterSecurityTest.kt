@@ -46,6 +46,28 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
+    fun `IPv6 IANA non-global special-purpose ranges are rejected`() {
+        listOf(
+            "2001:2::1",       // benchmarking
+            "2001:10::1",      // deprecated ORCHID
+            "2001:10:ffff::1", // end of deprecated ORCHID /28
+        ).forEach {
+            assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
+    fun `registered globally reachable IANA anycast hosts remain accepted`() {
+        listOf("2001:1::1", "2001:1::2", "2001:1::3").forEach {
+            assertTrue("$it is globally reachable per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+        assertFalse(
+            "2001:1::4 is not one of the registered global anycast hosts",
+            ConfigImporter.isPublicInternetAddress(InetAddress.getByName("2001:1::4")),
+        )
+    }
+
+    @Test
     fun `a mixed public and private DNS answer is rejected as a whole`() {
         val addresses = listOf(InetAddress.getByName("1.1.1.1"), InetAddress.getByName("127.0.0.1"))
         assertThrows(ConfigImportException::class.java) {
