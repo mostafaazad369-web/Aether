@@ -23,8 +23,27 @@ class AetherProcess(
     private val workingDir: File,
 ) {
     private var process: Process? = null
+    private var engineLease: IdentityVault.EngineLease? = null
 
+    /**
+     * Acquires identity ownership before unsealing or spawning. The monitor keeps
+     * stop() from racing a start that has not published its Process yet.
+     */
+    @Synchronized
     fun start(profile: ConnectionProfile, extraEnv: Map<String, String> = emptyMap()) {
+        check(process == null && engineLease == null) { "Engine is already started or starting." }
+        val lease = IdentityVault.acquireEngine(workingDir)
+        engineLease = lease
+        try {
+            startInternal(profile, extraEnv)
+        } catch (failure: Throwable) {
+            engineLease = null
+            lease.release()
+            throw failure
+        }
+    }
+
+    private fun startInternal(profile: ConnectionProfile, extraEnv: Map<String, String>) {
         val bin = File(nativeLibDir, "libaether.so")
         if (!bin.exists()) {
             throw IllegalStateException("Engine binary missing: ${bin.absolutePath}")
@@ -217,6 +236,7 @@ class AetherProcess(
         }, "aether-log").apply { isDaemon = true }.start()
     }
 
+    @Synchronized
     fun isAlive(): Boolean = process?.isAlive == true
 
     /**
@@ -262,11 +282,12 @@ class AetherProcess(
      * hung for tens of seconds and then had to retry. We now wait for the
      * process to actually exit and escalate to SIGKILL if it does not.
      */
+    @Synchronized
     fun stop() {
         val proc = process ?: run {
-            // Nothing to reap, but a previous session may still have left the
-            // identity in the clear (e.g. start() threw after the unseal).
-            sealIfLastEngine()
+            // A failed/in-flight start owns a lease too; release only this
+            // instance's lease. A never-started instance owns nothing.
+            releaseEngineLease()
             return
         }
         process = null
@@ -287,11 +308,11 @@ class AetherProcess(
         // The engine is gone, so the identity files are nobody's working set any
         // more: seal them and shred the plaintext. Done AFTER the reap on purpose -
         // sealing a file the engine is still writing would race its own save.
-        sealIfLastEngine()
+        releaseEngineLease()
     }
 
     /**
-     * Seals the identity, but only once the LAST engine has gone.
+     * Releases only this process instance's identity ownership, once.
      *
      * A Smart Plus race has two engines alive at the same time
      * ([studio.cluvex.aether.core.SmartPlusPlan]), and sealing SHREDS the
@@ -300,16 +321,16 @@ class AetherProcess(
      * is still connecting - not a slow path but a broken session and a device that
      * has to enrol again. [IdentityVault.markRunning] returns how many are left.
      */
-    private fun sealIfLastEngine() {
-        val stillRunning = IdentityVault.markRunning(false)
+    private fun releaseEngineLease() {
+        val lease = engineLease ?: return
+        engineLease = null
+        val stillRunning = lease.release() ?: return
         if (stillRunning > 0) {
             DiagnosticsLog.d(
                 "engine",
-                "Engine reaped; $stillRunning still running, so the identity stays unsealed.",
+                "Engine reaped; $stillRunning engine lease(s) remain, so the identity stays unsealed.",
             )
-            return
         }
-        IdentityVault.sealAndShred(workingDir)
     }
 
     /** Kills psiphon-tunnel-core processes of this app left behind by an earlier engine. */

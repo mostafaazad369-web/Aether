@@ -154,29 +154,49 @@ object IdentityVault {
      * tunnel service runs in the same process, and pulling the identity file out
      * from under a connected engine would break the session it is describing.
      */
-    fun sealIfIdle(dir: File) {
-        if (running) return
-        sealAndShred(dir)
-    }
-
-    /** True while at least one engine process is alive. */
-    val running: Boolean
-        get() = liveEngines.get() > 0
-
+    private val engineLock = Any()
     private val liveEngines = java.util.concurrent.atomic.AtomicInteger(0)
 
-    /**
-     * Set by [AetherProcess] around each engine's lifetime.
-     *
-     * Returns the number of engines still alive afterwards, so the caller can seal
-     * exactly when the last one is gone and not once per engine.
-     */
-    internal fun markRunning(alive: Boolean): Int =
-        if (alive) {
-            liveEngines.incrementAndGet()
-        } else {
-            liveEngines.updateAndGet { (it - 1).coerceAtLeast(0) }
+    fun sealIfIdle(dir: File) {
+        synchronized(engineLock) {
+            if (liveEngines.get() == 0) sealAndShred(dir)
         }
+    }
+
+    /** True while at least one engine owns (or is acquiring) the identity. */
+    val running: Boolean
+        get() = synchronized(engineLock) { liveEngines.get() > 0 }
+
+    /**
+     * Reserves identity ownership before unsealing/spawning. Every successful
+     * acquisition returns a unique, idempotent lease; only its owner can release it.
+     */
+    internal fun acquireEngine(dir: File): EngineLease {
+        synchronized(engineLock) { liveEngines.incrementAndGet() }
+        return EngineLease {
+            synchronized(engineLock) {
+                val remaining = liveEngines.updateAndGet { (it - 1).coerceAtLeast(0) }
+                if (remaining == 0) sealAndShred(dir)
+                remaining
+            }
+        }
+    }
+
+    internal class EngineLease internal constructor(
+        private val releaseAction: () -> Int,
+    ) : AutoCloseable {
+        private val released = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** Returns the remaining owner count, or null when already released. */
+        internal fun release(): Int? {
+            if (!released.compareAndSet(false, true)) return null
+            return releaseAction()
+        }
+
+        override fun close() {
+            release()
+        }
+    }
 
     private fun File.readBytesOrNull(): ByteArray? = runCatching { readBytes() }.getOrNull()
 }
