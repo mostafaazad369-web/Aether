@@ -304,12 +304,12 @@ class AetherProcess(
      * process to actually exit and escalate to SIGKILL if it does not.
      */
     @Synchronized
-    fun stop() {
+    fun stop(): Boolean {
         val proc = process ?: run {
             // A failed/in-flight start owns a lease too; release only this
             // instance's lease. A never-started instance owns nothing.
             releaseEngineLease()
-            return
+            return true
         }
         // Keep the reference until the OS confirms exit. destroyForcibly() is
         // only a signal request; it is not proof that the process has been reaped.
@@ -318,7 +318,7 @@ class AetherProcess(
                 "engine",
                 "Engine exit is not confirmed after SIGKILL; retaining its process reference and identity lease.",
             )
-            return
+            return false
         }
         process = null
         // The engine's Psiphon child must not outlive it (a SIGKILLed engine
@@ -327,6 +327,7 @@ class AetherProcess(
         // The engine is confirmed reaped, so the identity files are nobody's
         // working set any more: seal them and shred the plaintext.
         releaseEngineLease()
+        return true
     }
 
     /**
