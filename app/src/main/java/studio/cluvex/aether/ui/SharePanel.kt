@@ -134,7 +134,8 @@ fun SharePanel(
     val proxyPassword by ShareBridge.proxyPassword.collectAsState()
     val lanClients by ShareBridge.lanClients.collectAsState()
 
-    // Fail closed during the initial Keystore read; never briefly expose a stale LAN session.\n    var credentialStorageError by remember { mutableStateOf(true) }
+    // Fail closed during the initial Keystore read; never briefly expose a stale LAN session.
+    var credentialStorageError by remember { mutableStateOf(true) }
 
     // Do not enable sharing or expose credentials until the encrypted record is readable.
     LaunchedEffect(Unit) {
