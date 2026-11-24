@@ -44,7 +44,7 @@ class ConfigImporterSecurityTest {
 
     @Test
     fun `documentation and reserved IPv4 destinations are rejected`() {
-        listOf("192.0.2.1", "198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1").forEach {
+        listOf("192.0.2.1", "198.18.0.1", "198.19.255.254", "198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1", "255.255.255.255").forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
     }
