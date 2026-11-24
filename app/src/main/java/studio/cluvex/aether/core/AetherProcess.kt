@@ -335,35 +335,8 @@ class AetherProcess(
      * Interrupts are deferred until the bounded wait finishes so cancellation of
      * the caller cannot skip the reap check.
      */
-    private fun terminateAndReap(proc: Process): Boolean {
-        runCatching { proc.destroy() }
-        if (waitForExitUninterruptibly(proc, GRACEFUL_EXIT_MS)) return true
-
-        runCatching { proc.destroyForcibly() }
-        return waitForExitUninterruptibly(proc, FORCED_EXIT_CONFIRM_MS)
-    }
-
-    private fun waitForExitUninterruptibly(proc: Process, timeoutMs: Long): Boolean {
-        val deadline = System.nanoTime() +
-            java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        var interrupted = false
-        try {
-            while (true) {
-                val remainingNanos = deadline - System.nanoTime()
-                if (remainingNanos <= 0L) return !proc.isAlive
-                try {
-                    if (proc.waitFor(remainingNanos, java.util.concurrent.TimeUnit.NANOSECONDS)) {
-                        return true
-                    }
-                    return !proc.isAlive
-                } catch (_: InterruptedException) {
-                    interrupted = true
-                }
-            }
-        } finally {
-            if (interrupted) Thread.currentThread().interrupt()
-        }
-    }
+    private fun terminateAndReap(proc: Process): Boolean =
+        ProcessReaper.terminateAndReap(proc)
 
     /**
      * Releases only this process instance's identity ownership, once.
@@ -401,13 +374,6 @@ class AetherProcess(
                 }
             }
         }
-    }
-
-    private companion object {
-        /** How long a polite SIGTERM gets before we escalate to SIGKILL. */
-        const val GRACEFUL_EXIT_MS = 250L
-        /** Bounded confirmation window after SIGKILL. */
-        const val FORCED_EXIT_CONFIRM_MS = 2_000L
     }
 
     /**
