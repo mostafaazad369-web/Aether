@@ -30,8 +30,17 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
-    fun `IPv6 unique local link local and documentation destinations are rejected`() {
-        listOf("fc00::1", "fe80::1", "2001:db8::1", "2002:0808:0808::1").forEach {
+    fun `IPv6 unique local link local special purpose and documentation destinations are rejected`() {
+        listOf(
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "2001:0100::1",
+            "2001:01ff::1",
+            "2002:0808:0808::1",
+            "3fff::1",
+            "3fff:0fff::1",
+        ).forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
         }
     }
