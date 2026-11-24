@@ -25,6 +25,24 @@ class ConfigImporterSecurityTest {
     }
 
     @Test
+    fun `IANA globally reachable IPv4 special-purpose allocations are accepted`() {
+        listOf(
+            "192.31.196.1", // AS112-v4
+            "192.52.193.1", // AMT
+            "192.175.48.1", // Direct Delegation AS112
+        ).forEach {
+            assertTrue("$it is globally reachable per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
+    fun `deprecated 6to4 relay anycast IPv4 allocation remains rejected`() {
+        listOf("192.88.99.1", "192.88.99.2", "192.88.99.255").forEach {
+            assertFalse("$it is not globally reachable per IANA", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
+        }
+    }
+
+    @Test
     fun `documentation and reserved IPv4 destinations are rejected`() {
         listOf("192.0.2.1", "198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1").forEach {
             assertFalse("$it must not be routable", ConfigImporter.isPublicInternetAddress(InetAddress.getByName(it)))
