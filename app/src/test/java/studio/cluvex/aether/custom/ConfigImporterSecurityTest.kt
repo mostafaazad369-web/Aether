@@ -135,8 +135,8 @@ class ConfigImporterSecurityTest {
             "2001:20::1 is outside the deprecated ORCHID /28",
             ConfigImporter.isPublicInternetAddress(InetAddress.getByName("2001:20::1")),
         )
-        assertTrue(
-            "5f01::1 is outside the SRv6 SIDs /16",
+        assertFalse(
+            "5f01::1 is outside the SRv6 SIDs /16 but also outside the 2000::/3 global-unicast space",
             ConfigImporter.isPublicInternetAddress(InetAddress.getByName("5f01::1")),
         )
     }
