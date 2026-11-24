@@ -938,6 +938,9 @@
 <string name="preset_import_preview">Import %1$d presets? Current settings will not change until a preset is selected. Proxy credentials, Zero Trust secrets and custom server data are excluded.</string>
 <string name="preset_export_done">Settings exported without credentials or custom servers.</string>
 <string name="preset_operation_failed">Preset operation failed. Storage may be unavailable or the settings file may be invalid.</string>
+    <string name="profile_storage_key_unavailable">Android Keystore is unavailable. Zero Trust credentials cannot be read or saved.</string>
+    <string name="profile_storage_corrupt">Stored Zero Trust credentials are damaged. They were preserved and must be repaired before use.</string>
+    <string name="profile_storage_failure">Secure Zero Trust credential storage failed. The profile was not accepted as saved.</string>
     <string name="cc_delete_tab_title">Delete tab and its configs</string>
     <string name="cc_delete_tab_confirm">Delete “%1$s” and all configs in this tab? This cannot be undone. The All tab is protected.</string>
 
