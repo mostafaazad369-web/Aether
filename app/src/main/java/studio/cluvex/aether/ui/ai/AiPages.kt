@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +49,7 @@ import studio.cluvex.aether.ai.AiPatch
 import studio.cluvex.aether.ai.AiProbe
 import studio.cluvex.aether.ai.AiSession
 import studio.cluvex.aether.ai.AiTopic
+import studio.cluvex.aether.data.GeminiStore
 import studio.cluvex.aether.data.LanguagePrefs
 import studio.cluvex.aether.model.ConnectionProfile
 import studio.cluvex.aether.model.ConnectionState
@@ -93,7 +95,19 @@ fun AiSettingsPage(
     val models by AiSession.models.collectAsState()
     val discovering by AiSession.discovering.collectAsState()
     val probe by AiSession.probe.collectAsState()
+    val storageError by AiSession.storageError.collectAsState()
+    val forgetResult by AiSession.forgetResult.collectAsState()
     val gate = AiSession.gate(state, profile)
+
+    LaunchedEffect(forgetResult) {
+        when (forgetResult) {
+            AiSession.ForgetResult.SUCCESS ->
+                Toast.makeText(context, context.getString(R.string.ai_key_forgotten), Toast.LENGTH_SHORT).show()
+            AiSession.ForgetResult.FAILURE ->
+                Toast.makeText(context, context.getString(R.string.ai_key_forget_failed), Toast.LENGTH_SHORT).show()
+            null -> Unit
+        }
+    }
 
     // Local draft wins once the user has typed, so a debounced store write can
     // never echo a stale value back into the field mid-key. Same defence as
@@ -101,8 +115,6 @@ fun AiSettingsPage(
     var draft by remember { mutableStateOf<String?>(null) }
     var reveal by remember { mutableStateOf(false) }
     val keyText = draft ?: settings.apiKey
-
-    val forgotten = stringResource(R.string.ai_key_forgotten)
 
     // AUDIT F-3: the Gemini API key lives on this page, and the reveal toggle
     // below puts it on screen in the clear. Blocks screenshots, screen recording
@@ -193,13 +205,15 @@ fun AiSettingsPage(
                         icon = Icons.Rounded.Delete,
                         destructive = true,
                         onClick = {
-                            draft = ""
+                            draft = null
                             reveal = false
                             AiSession.forget()
-                            Toast.makeText(context, forgotten, Toast.LENGTH_SHORT).show()
                         },
                     )
                 }
+            }
+            storageError?.let { error ->
+                GroupFooter(stringResource(error.messageResource()))
             }
             GroupFooter(stringResource(R.string.ai_key_help))
         }
@@ -543,6 +557,13 @@ private fun InfoBlock(
 
 /** Summary line under "Test API connection". */
 @Composable
+private fun GeminiStore.StorageError.messageResource(): Int = when (this) {
+    GeminiStore.StorageError.KEY_UNAVAILABLE -> R.string.ai_key_storage_unavailable
+    GeminiStore.StorageError.CORRUPT_DATA -> R.string.ai_key_storage_corrupt
+    GeminiStore.StorageError.STORAGE_FAILURE -> R.string.ai_key_storage_failure
+    GeminiStore.StorageError.MISSING_KEY -> R.string.ai_key_storage_failure
+}
+
 private fun probeSummary(probe: AiProbe, discovering: Boolean): String = when {
     discovering -> stringResource(R.string.ai_test_running)
     probe is AiProbe.Ok -> stringResource(R.string.ai_test_ok, probe.modelCount, probe.via)
