@@ -386,6 +386,10 @@
     <string name="ai_key_paste">Paste</string>
     <string name="ai_key_forget">Forget the key and the model list</string>
     <string name="ai_key_forgotten">API key removed</string>
+    <string name="ai_key_storage_unavailable">Android Keystore is unavailable. The saved API key cannot be read or updated, so AI requests are disabled.</string>
+    <string name="ai_key_storage_corrupt">The encrypted API key is damaged and was preserved. AI requests are disabled until the credential storage issue is resolved.</string>
+    <string name="ai_key_storage_failure">Secure credential storage failed. The API key was not accepted; AI requests are disabled.</string>
+    <string name="ai_key_forget_failed">The API key could not be securely removed. No success was reported; check the credential storage status.</string>
     <string name="ai_test">Test the API connection</string>
     <string name="ai_test_hint">Checks the key and lists the models it may use</string>
     <string name="ai_test_running">Testing…</string>
