@@ -908,6 +908,9 @@
 <string name="preset_import_preview">%1$d پروفایل وارد شود؟ تا انتخاب یک پروفایل، تنظیمات فعلی تغییر نمی‌کند. اطلاعات ورود پراکسی، رازهای Zero Trust و داده سرورهای سفارشی منتقل نمی‌شوند.</string>
 <string name="preset_export_done">تنظیمات بدون اطلاعات ورود و سرورهای سفارشی صادر شد.</string>
 <string name="preset_operation_failed">عملیات پروفایل انجام نشد؛ ممکن است ذخیره‌سازی در دسترس نباشد یا فایل تنظیمات معتبر نباشد.</string>
+    <string name="profile_storage_key_unavailable">ذخیره‌ساز امن اندروید در دسترس نیست. اعتبارنامه‌های زیروتراست خوانده یا ذخیره نمی‌شوند.</string>
+    <string name="profile_storage_corrupt">اعتبارنامه‌های ذخیره‌شدهٔ زیروتراست آسیب دیده‌اند. داده‌ها حفظ شده‌اند و پیش از استفاده باید مشکل برطرف شود.</string>
+    <string name="profile_storage_failure">ذخیره‌سازی امن اعتبارنامه‌های زیروتراست ناموفق بود. ذخیره‌شدن پروفایل تأیید نشد.</string>
     <string name="cc_delete_tab_title">حذف تب و کانفیگ‌های آن</string>
     <string name="cc_delete_tab_confirm">تب «%1$s» و تمام کانفیگ‌های داخل آن حذف شوند؟ این کار برگشت‌پذیر نیست. تب «همه» حذف نمی‌شود.</string>
 
