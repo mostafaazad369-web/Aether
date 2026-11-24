@@ -76,9 +76,7 @@ class SocksTunBridge(
 ) {
     data class Stats(val txBytes: Long = 0, val rxBytes: Long = 0)
 
-    private val isRunning = AtomicBoolean(false)
-    private var readThread: Thread? = null
-    private var writeThread: Thread? = null
+    private val workerGroup = BridgeWorkerGroup()
     private val executor = Executors.newCachedThreadPool()
     private val tunOutputQueue = LinkedBlockingQueue<ByteArray>(32768)
     private val tcpSessions = ConcurrentHashMap<FlowKey, TcpSession>()
@@ -106,78 +104,105 @@ class SocksTunBridge(
     )
 
     fun start() {
-        if (isRunning.getAndSet(true)) return
-
         LogRepository.i("Initializing tunnel bridge (MTU=$mtu)...")
 
-        writeThread = Thread({
-            val fos = FileOutputStream(tunDescriptor.fileDescriptor)
-            while (isRunning.get()) {
-                try {
-                    val packet = tunOutputQueue.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                    fos.write(packet)
-                    rxBytes.addAndGet(packet.size.toLong())
-                } catch (_: InterruptedException) {
-                    break
-                } catch (e: Exception) {
-                    if (isRunning.get()) LogRepository.w("TUN write error: ${e.message}")
+        val writer = Thread({
+            try {
+                // These stream wrappers deliberately do not close the shared TUN fd.
+                val output = FileOutputStream(tunDescriptor.fileDescriptor)
+                while (workerGroup.isRunning) {
+                    val packet = try {
+                        tunOutputQueue.poll(500, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        break
+                    } ?: continue
+                    try {
+                        output.write(packet)
+                        rxBytes.addAndGet(packet.size.toLong())
+                    } catch (e: Exception) {
+                        if (workerGroup.isRunning) LogRepository.w("TUN write error: ${e.message}")
+                        break
+                    }
                 }
+            } catch (e: Exception) {
+                if (workerGroup.isRunning) LogRepository.w("TUN writer failed: ${e.message}")
+            } finally {
+                if (workerGroup.isRunning) stop()
             }
         }, "Aether-TunWriter").apply {
             priority = Thread.MAX_PRIORITY
             isDaemon = true
-            start()
         }
 
-        readThread = Thread({
-            val fis = FileInputStream(tunDescriptor.fileDescriptor)
-            val buffer = ByteArray(mtu + 200)
-            waitForCore()
-            while (isRunning.get()) {
-                try {
-                    val n = fis.read(buffer)
-                    if (n <= 0) continue
-                    txBytes.addAndGet(n.toLong())
-                    processPacket(buffer, n)
-                } catch (e: Exception) {
-                    if (isRunning.get()) LogRepository.w("TUN read error: ${e.message}")
+        val reader = Thread({
+            try {
+                // The VPN service owns tunDescriptor and closes it after bridge teardown.
+                val input = FileInputStream(tunDescriptor.fileDescriptor)
+                val buffer = ByteArray(mtu + 200)
+                waitForCore()
+                while (workerGroup.isRunning) {
+                    val count = try {
+                        input.read(buffer)
+                    } catch (e: Exception) {
+                        if (workerGroup.isRunning) LogRepository.w("TUN read error: ${e.message}")
+                        break
+                    }
+                    if (count <= 0) break
+                    txBytes.addAndGet(count.toLong())
+                    processPacket(buffer, count)
                 }
+            } catch (e: Exception) {
+                if (workerGroup.isRunning) LogRepository.w("TUN reader failed: ${e.message}")
+            } finally {
+                if (workerGroup.isRunning) stop()
             }
         }, "Aether-TunReader").apply {
             priority = Thread.MAX_PRIORITY
             isDaemon = true
-            start()
+        }
+
+        try {
+            workerGroup.start(listOf(writer, reader))
+        } catch (failure: Throwable) {
+            stop()
+            throw failure
         }
     }
 
     fun stop() {
-        if (!isRunning.getAndSet(false)) return
         tcpSessions.values.forEach { it.close() }
         tcpSessions.clear()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         executor.shutdownNow()
-        readThread?.interrupt()
-        writeThread?.interrupt()
+        if (!workerGroup.stop()) {
+            LogRepository.w("TUN worker did not exit within the bounded stop wait; descriptor owner must close the TUN")
+        }
     }
 
     fun getStats(): Stats = Stats(txBytes.get(), rxBytes.get())
 
     private fun waitForCore() {
-        var ready = false
-        repeat(25) {
+        repeat(25) { attempt ->
+            if (!workerGroup.isRunning) return
             try {
-                Socket().use { s ->
-                    runCatching { vpnService.protect(s) }
-                    s.connect(InetSocketAddress(socksHost, socksPort), 200)
+                Socket().use { socket ->
+                    runCatching { vpnService.protect(socket) }
+                    socket.connect(InetSocketAddress(socksHost, socksPort), 200)
                 }
-                ready = true
-                return@repeat
+                LogRepository.i("Link synchronization complete")
+                return
             } catch (_: Exception) {
-                Thread.sleep(200)
+                if (attempt < 24 && workerGroup.isRunning) {
+                    try {
+                        Thread.sleep(200)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return
+                    }
+                }
             }
         }
-        if (ready) LogRepository.i("Link synchronization complete")
     }
 
     private fun enqueueTun(data: ByteArray, critical: Boolean = false) {
