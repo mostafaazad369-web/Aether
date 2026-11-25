@@ -1,5 +1,6 @@
 package studio.cluvex.aether.core
 
+import java.net.DatagramSocket
 import java.net.Socket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -98,5 +99,31 @@ class ShareListenerRegistryTest {
         assertEquals(1, client.closes)
         assertEquals(1, firstUpstream.closes)
         assertEquals(1, secondUpstream.closes)
+    }
+
+    @Test
+    fun closingClientOwnershipClosesRegisteredUdpEndpoints() {
+        class TrackingDatagramSocket : DatagramSocket() {
+            var closes = 0
+            override fun close() {
+                closes++
+                super.close()
+            }
+        }
+
+        val client = Socket()
+        val udpClientSide = TrackingDatagramSocket()
+        val udpUpstreamSide = TrackingDatagramSocket()
+        val owner = ShareBridge.ActiveClient(client, viaAddress = null)
+        owner.datagrams.add(udpClientSide)
+        owner.datagrams.add(udpUpstreamSide)
+
+        owner.close()
+        owner.close()
+
+        assertEquals(1, udpClientSide.closes)
+        assertEquals(1, udpUpstreamSide.closes)
+        assertTrue(udpClientSide.isClosed)
+        assertTrue(udpUpstreamSide.isClosed)
     }
 }
