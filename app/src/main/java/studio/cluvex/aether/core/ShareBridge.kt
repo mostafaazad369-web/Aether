@@ -396,12 +396,12 @@ object ShareBridge {
         // critical section yet becomes stale immediately, not when stop's
         // background cleanup thread eventually runs.
         val generation = commandGeneration.reserve()
-        lanRequestGeneration.reserve()
-        lanConfigGeneration.reserve()
         val stopSession = synchronized(this) {
             // A newer start may have superseded this stop while it waited for
             // the monitor. In that case this stop must not mutate the new run.
             if (!commandGeneration.isCurrent(generation)) return
+            lanRequestGeneration.reserve()
+            lanConfigGeneration.reserve()
             _active.value = false
             lanRequested = false
             _lanStatus.value = LanStatus.OFF
@@ -423,9 +423,11 @@ object ShareBridge {
      * Used by the Share card's switch.
      */
     fun enableLan() {
-        val generation = lanRequestGeneration.reserve()
-        lanRequested = true
-        if (!_active.value) {
+        val (generation, shouldStart) = synchronized(this) {
+            lanRequested = true
+            lanRequestGeneration.reserve() to !_active.value
+        }
+        if (shouldStart) {
             start(localOnly = false)
             return
         }
@@ -445,9 +447,11 @@ object ShareBridge {
      * needs them - r4 stopped the whole bridge here and broke proxy mode).
      */
     fun disableLan() {
-        val generation = lanRequestGeneration.reserve()
-        lanRequested = false
-        _lanStatus.value = LanStatus.OFF
+        val generation = synchronized(this) {
+            lanRequested = false
+            _lanStatus.value = LanStatus.OFF
+            lanRequestGeneration.reserve()
+        }
         thread(name = "share-lan-off", isDaemon = true) {
             synchronized(this) {
                 if (!lanRequestGeneration.isCurrent(generation) || lanRequested) return@thread
@@ -460,9 +464,11 @@ object ShareBridge {
 
     /** Switches between Home Wi-Fi and Mobile-data hotspot sharing. */
     fun setMode(mode: ShareLeakGuard.Mode) {
-        if (_mode.value == mode) return
-        _mode.value = mode
-        val generation = lanConfigGeneration.reserve()
+        val generation = synchronized(this) {
+            if (_mode.value == mode) return
+            _mode.value = mode
+            lanConfigGeneration.reserve()
+        }
         if (!_active.value || !lanRequested) return
         thread(name = "share-mode", isDaemon = true) {
             synchronized(this) {
@@ -508,7 +514,10 @@ object ShareBridge {
      * it can route anything directly, LAN clients are refused (zero leak).
      */
     fun noteEngineRoutes(directRulesActive: Boolean) {
-        engineDirectRoutes = directRulesActive
+        val generation = synchronized(this) {
+            engineDirectRoutes = directRulesActive
+            lanConfigGeneration.reserve()
+        }
         if (directRulesActive) {
             DiagnosticsLog.w(
                 TAG,
@@ -516,7 +525,6 @@ object ShareBridge {
                     "session so a shared device can never leave outside the tunnel.",
             )
         }
-        val generation = lanConfigGeneration.reserve()
         if (_active.value && lanRequested) {
             thread(name = "share-routes", isDaemon = true) {
                 synchronized(this) {
