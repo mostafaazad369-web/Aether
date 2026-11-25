@@ -346,3 +346,23 @@ The Xray teardown path had the same class of failure previously corrected for th
 ### Remaining boundary
 
 The Xray handle is still stored in the Service instance. If `onDestroy()` returns after an unconfirmed stop and the app process remains alive while the Service instance is discarded, this handle can still be lost. A process-level resource owner remains necessary for that broader case. This change narrows the loss window and prevents premature deletion/replacement, but does not claim to solve Service-destruction ownership or child-process survival after app-process death.
+## Follow-up audit — Service destruction and Xray stop serialization (2026-11-25)
+
+Additional call-site tracing confirms the following:
+
+- `AetherVpnService.onDestroy()` is a synchronous lifecycle callback. It cancels the session and stop jobs, then calls `cleanupNativeOnly()` and `stopCustom()` inline before cancelling the service scope.
+- `stopCustom()` acquires `xrayLock` and calls `XrayProcess.stop()` while holding that monitor. The new reap policy may wait up to the graceful and forced-confirmation windows (250 ms + 2,000 ms), and this can occur on the main thread when reached from `onDestroy()`.
+- `startXray()` also calls `runner.stop()` while holding `xrayLock`. This prevents a concurrent watcher/teardown from mutating the same runner during the reap, but it makes the bounded wait part of the lock hold time.
+- The Xray watcher restarts through the same runner and under `xrayLock`; `XrayProcess.start()`/`stop()` are also synchronized on the runner, so the two layers serialize process replacement and stop.
+- `onDestroy()` cancels `stopJob` but does not join it. Synchronous native cleanup is serialized by the service's lifecycle lock; Xray start/stop is serialized separately by `xrayLock`. This is not a process-level owner and does not preserve an unconfirmed handle after the Service instance becomes unreachable.
+
+### Risk and decision
+
+The Xray change closes premature handle/config deletion and prevents replacement before confirmed exit. It does not solve the broader Service-destruction ownership gap. It also introduces a bounded wait of up to 2.25 seconds for Xray when teardown is invoked synchronously; cumulative waits across other process/native cleanup paths could increase main-thread lifecycle latency. Do not move this work to an unowned coroutine or executor as a superficial fix: Android may destroy the app process before asynchronous cleanup completes. A future process-level owner must define both resource ownership and a main-thread-safe destruction contract, with explicit completion/fallback semantics.
+
+### Verification still required
+
+- Add focused tests around XrayProcess using an injectable process-launch/reap boundary, including failed reap retaining the config and rejecting replacement.
+- Add service-level tests for destruction racing with Xray startup and watcher restart.
+- Measure worst-case `onDestroy()` latency with injected slow/failing process termination and native cleanup.
+- Keep Android device/process-survival verification separate from JVM policy tests.
