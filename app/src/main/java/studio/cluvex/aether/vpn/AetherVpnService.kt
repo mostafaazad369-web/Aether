@@ -2318,7 +2318,9 @@ class AetherVpnService : VpnService() {
             xrayGeneration++
             xrayWatch?.cancel()
             xrayWatch = null
-            runCatching { runner.stop() }
+            check(runner.stop()) {
+                "Previous Xray process has not been confirmed reaped; refusing to start another."
+            }
             xrayGeneration
         }
         val avoid = setOf(
@@ -2481,9 +2483,14 @@ class AetherVpnService : VpnService() {
             xrayGeneration++
             xrayWatch?.cancel()
             xrayWatch = null
-            runCatching { xray?.stop() }
-            xray = null
-            CustomSession.set(null)
+            val current = xray
+            val stopped = current == null || runCatching { current.stop() }.getOrDefault(false)
+            if (stopped) {
+                xray = null
+                CustomSession.set(null)
+            } else {
+                DiagnosticsLog.e(TAG, "Xray exit is unconfirmed; retaining its handle and config for a later teardown retry.")
+            }
         }
     }
 
