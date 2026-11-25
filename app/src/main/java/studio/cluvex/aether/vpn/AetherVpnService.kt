@@ -2306,8 +2306,7 @@ class AetherVpnService : VpnService() {
     }
 
     private suspend fun startXray(runner: XrayProcess, cfg: CustomConfig, dialVia: Int?): Int {
-        // Reserve a generation before doing any suspendable config work. A stop
-        // invalidates it, so a late config build can never resurrect Xray.
+        // Reserve a generation before suspendable config work; teardown invalidates it.
         val generation = synchronized(xrayLock) {
             check(xray === runner) { "Xray start was superseded before it began" }
             xrayGeneration++
@@ -2347,11 +2346,7 @@ class AetherVpnService : VpnService() {
         }
         currentCoroutineContext().ensureActive()
         synchronized(xrayLock) {
-            if (generation != xrayGeneration || xray !== runner) {
-                throw CancellationException("Xray start was superseded")
-            }
-            // XrayProcess.start() calls stop() internally, so it must share this
-            // same lock with every teardown and watchdog restart.
+            if (generation != xrayGeneration || xray !== runner) throw CancellationException("Xray start was superseded")
             runner.start(config, "session")
         }
         val open = PortProbe.awaitOpen(SOCKS_HOST, port, XRAY_START_TIMEOUT_MS) { runner.isAlive() }
@@ -2379,15 +2374,13 @@ class AetherVpnService : VpnService() {
             "Xray core listening on $SOCKS_HOST:$port" + (dialVia?.let { " (dialling via $it)" } ?: ""),
         )
         synchronized(xrayLock) {
-            if (generation != xrayGeneration || xray !== runner) {
-                throw CancellationException("Xray start was superseded")
-            }
+            if (generation != xrayGeneration || xray !== runner) throw CancellationException("Xray start was superseded")
             watchXray(runner, config, generation)
         }
         return port
     }
 
-    /** Restarts a crashed Xray only while the generation that started it remains current. */
+    /** Restarts a crashed Xray only while its owning generation remains current. */
     private fun watchXray(runner: XrayProcess, config: String, generation: Int) {
         if (generation != xrayGeneration || xray !== runner) return
         xrayWatch?.cancel()
@@ -2407,9 +2400,7 @@ class AetherVpnService : VpnService() {
                         restarts++
                         healthySeconds = 0
                         DiagnosticsLog.w(TAG, "Xray exited - restarting it ($restarts/$XRAY_MAX_RESTARTS).")
-                        if (xray === runner && generation == xrayGeneration) {
-                            runCatching { runner.start(config, "session") }
-                        }
+                        if (xray === runner && generation == xrayGeneration) runCatching { runner.start(config, "session") }
                     }
                 }
             }
@@ -2476,15 +2467,6 @@ class AetherVpnService : VpnService() {
             delay(1_000L)
         }
         if (currentScopeActive()) throw IllegalStateException(getString(R.string.cc_err_core_failed))
-    }
-
-    private fun stopXrayOnly() {
-        synchronized(xrayLock) {
-            xrayGeneration++
-            xrayWatch?.cancel()
-            xrayWatch = null
-            runCatching { xray?.stop() }
-        }
     }
 
     /** Everything the custom-config code started; a no-op for every other session. */
@@ -3598,6 +3580,44 @@ class AetherVpnService : VpnService() {
          * back, it repeats - and why nothing with a long-lived stream (a live
          * dubbing session, a video) ever survived a minute.
          *
+         * Port 443 is the one port every exit must allow, and a TLS handshake to
+         * it is a genuine payload round trip through the data plane, which is
+         * what the probe was supposed to be measuring in the first place. Each
+         * target is also registered with the Psiphon health watchdog (removed in 1.4.0) so it can never count
+         * as evidence against a server again, whatever port it lands on.
+         */
+        private val PROBE_TARGETS = arrayOf(
+            Triple("1.1.1.1", 443, "cloudflare-dns.com"),
+            Triple("8.8.8.8", 443, "dns.google"),
+            Triple("9.9.9.9", 443, "dns.quad9.net"),
+        )
+        private const val PROBE_TIMEOUT_MS = 8_000
+        private const val PROBE_RETRY_GAP_MS = 1_000L
+
+        /**
+         * Bytes the device data path must have carried since the previous check
+         * for a failed probe to be dismissed as "busy, not broken".
+         *
+         * A wedged tunnel moves nothing at all; anything above idle keepalive
+         * noise means the path works and the probe is the thing that is wrong.
+         */
+        private const val DATA_PATH_ALIVE_BYTES = 16 * 1024L
+
+        /** How often a CHAINED session's full pipeline is probed end to end (1.2.8). */
+        private const val PIPELINE_PROBE_INTERVAL_MS = 15_000L
+
+        /** And how soon it is re-probed once a check has failed. */
+        private const val PIPELINE_PROBE_RETRY_MS = 5_000L
+
+        /** Consecutive dead pipeline readings before the session is rebuilt. */
+        private const val PIPELINE_DEAD_CONFIRMATIONS = 2
+
+        /**
+         * How long to wait for the previous engine to release the local SOCKS5
+         * port before starting a new one (1.2.2 protocol-switch fix).
+         */
+        private const val PORT_RELEASE_WAIT_MS = 3_000L
+
         /**
          * Cap for the FIRST attempt of a hand-picked protocol, so a throttled
          * network cannot hold the user on "Connecting" for the whole scan
