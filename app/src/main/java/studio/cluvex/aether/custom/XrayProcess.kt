@@ -7,7 +7,6 @@ import studio.cluvex.aether.core.ProcessReaper
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.util.concurrent.TimeUnit
 
 /**
  * Runs the bundled Xray core (`libxray.so`, Xray-core from XTLS, shipped beside
@@ -103,7 +102,6 @@ class XrayProcess(
         const val BINARY = "libxray.so"
         const val LOG_TAG = "xray"
         const val MISSING = "This APK does not contain the Xray core (libxray.so)."
-        private const val GRACEFUL_EXIT_MS = 400L
 
         /** Preferred first port for Xray's local listener; the next free one is taken when busy. */
         private const val PREFERRED_PORT = 18_830
