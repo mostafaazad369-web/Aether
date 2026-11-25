@@ -22,6 +22,9 @@ def main():
         for marker in FORBIDDEN:
             if marker in text:
                 failures.append(f"{path.relative_to(ROOT)} still references {marker}")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    if "Gemini AI assistant" in readme or "Optional Gemini AI assistant" in readme:
+        failures.append("README still advertises the retired assistant")
     for directory in (ROOT / "app/src/main/res/values", ROOT / "app/src/main/res/values-fa"):
         xml = directory / "strings.xml"
         if 'name="ai_' in xml.read_text(encoding="utf-8"):

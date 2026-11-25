@@ -36,7 +36,6 @@
 - [Settings guide](#settings-guide)
 - [Quick Settings tile and widget](#quick-settings-tile-and-widget)
 - [Sharing the VPN with other devices](#sharing-the-vpn-with-other-devices)
-- [Gemini AI assistant](#gemini-ai-assistant)
 - [Privacy: where your traffic goes](#privacy-where-your-traffic-goes)
 - [Security audit](#security-audit)
 - [Updates and app signing](#updates-and-app-signing)
@@ -80,7 +79,6 @@ NapsternetV configs run in a bundled Xray-core, alone or chained with the engine
 - **VPN sharing** over Wi-Fi or hotspot (HTTP, SOCKS5 and PAC), with setup pages
   for the other devices.
 - **Quick Settings tile** and a **home-screen widget**.
-- **Optional Gemini AI assistant** for settings advice, explanations and chat.
 - **Encrypted local diagnostics log** and settings, sealed with an Android Keystore key.
 
 ## Connection modes
@@ -141,9 +139,8 @@ App version **1.6.0** (version code 19), engine core **2.4.0**.
   moving home-screen effects on weaker phones (the connect button still spins while connecting).
 - **Connection sounds** switch: turns the short cue on connect and disconnect on or off; silent mode is respected.
 
-**Assistant and polish**
+**App polish**
 
-- Gemini uses the active session's final endpoint and never sees the private config vault.
 - The onboarding pager is gone; the *What's new* dialog and *Messages & announcements* remain.
 - A stable-key tab strip fixes the tab-index crash.
 
@@ -234,7 +231,7 @@ Tips:
 | **Zero Trust** | Join a Cloudflare Zero Trust organization instead of consumer WARP |
 | **Core log level** | Detail of the engine log in *Diagnostics* |
 
-Every option has an information icon that explains what it does.
+Settings pages include concise descriptions and help text where useful.
 
 ## Quick Settings tile and widget
 
