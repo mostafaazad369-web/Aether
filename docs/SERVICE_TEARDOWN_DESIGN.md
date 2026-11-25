@@ -420,3 +420,9 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - `startSyncForGeneration()` performs bind/setup work while holding the ShareBridge monitor. A concurrent `stop()` may therefore wait for that work before it can mark the bridge inactive; measure this latency on-device.
 - `attach()`, credentials/auth changes, client relay threads, and the watcher lifecycle are not converted into one process-level resource owner by these changes.
 - No claim is made that Service destruction now waits for all ShareBridge resources to terminate.
+
+### ShareBridge queued LAN-start invalidation follow-up (2026-11-25)
+
+- A follow-up audit found that an inactive `enableLan()` queued bridge startup using only the bridge command generation. A later `disableLan()` invalidated the LAN request generation but did not invalidate that queued bridge command; the startup could therefore overwrite the newer LAN intent by setting `lanRequested = true`.
+- LAN-triggered startup now carries the LAN request generation into `startSyncForGeneration()` and is rejected under the bridge monitor if that request has since been superseded. Ordinary loopback starts remain independent and are not cancelled by `disableLan()`.
+- Added a JVM policy regression test asserting that a later LAN disable invalidates the queued LAN intent while leaving the independent bridge command current. This is still a generation-policy test, not an Android listener/socket integration test; build, tests and device behavior remain unverified.
