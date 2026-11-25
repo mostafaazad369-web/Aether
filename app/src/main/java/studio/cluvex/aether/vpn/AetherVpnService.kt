@@ -3049,8 +3049,7 @@ class AetherVpnService : VpnService() {
             // 443 is the one port an exit cannot refuse without being useless.
             //
             // NO HOSTNAME VERIFICATION HERE, ON PURPOSE - do not "fix" this.
-            // Unlike the geolocation probes (NetProbe.tlsWrap) and the Gemini
-            // client (GeminiHttp.tlsWrap), which both verify, this handshake sends
+            // Unlike the geolocation probes (NetProbe.tlsWrap), this handshake sends
             // no request and trusts nothing that comes back: the only thing read
             // off it is "did bytes round-trip". Verifying the certificate would
             // make a captive portal or an interception proxy indistinguishable from

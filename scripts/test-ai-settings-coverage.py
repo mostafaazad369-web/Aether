@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "app/src/main/java"
 FORBIDDEN = (
     "AiSession", "GeminiClient", "GeminiHttp", "SettingsRoute.AI",
-    "AiTopicIcon", "LocalAiHost", "AiAdvisorPage", "AiChatScreen",
+    "AiTopic", "aiTopic =", "AiTopicIcon", "LocalAiHost", "AiAdvisorPage", "AiChatScreen",
     "R.string.ai_",
 )
 

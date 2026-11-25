@@ -65,20 +65,19 @@ class AetherApp : Application() {
             // 1.5.0: unseal the saved custom configs once, so the settings row and
             // the first connect read them without touching the keystore again.
             runCatching { studio.cluvex.aether.custom.CustomConfigStore.load(this) }
-            
-                    // Retire the old assistant's encrypted key and preferences on upgrade.
-                    // Other Keystore-backed credentials are intentionally preserved.
-                    runCatching {
-                        if (SecretStore(this).clearResult(LEGACY_GEMINI_SECRET) !is SecretStore.WriteResult.Cleared) {
-                            DiagnosticsLog.w("startup", "Legacy assistant credential cleanup incomplete")
-                        }
-                    }
-                    runCatching {
-                        val legacyPreferences = File(filesDir, "datastore/aether_ai.preferences_pb")
-                        if (legacyPreferences.exists() && !legacyPreferences.delete()) {
-                            DiagnosticsLog.w("startup", "Legacy assistant preferences cleanup incomplete")
-                        }
-                    }
+            // Retire the old assistant's encrypted key and preferences on upgrade.
+            // Other Keystore-backed credentials are intentionally preserved.
+            runCatching {
+                if (SecretStore(this).clearResult(LEGACY_GEMINI_SECRET) !is SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w("startup", "Legacy assistant credential cleanup incomplete")
+                }
+            }
+            runCatching {
+                val legacyPreferences = File(filesDir, "datastore/aether_ai.preferences_pb")
+                if (legacyPreferences.exists() && !legacyPreferences.delete()) {
+                    DiagnosticsLog.w("startup", "Legacy assistant preferences cleanup incomplete")
+                }
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

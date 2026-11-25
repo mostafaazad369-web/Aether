@@ -218,13 +218,7 @@ fun LazyListScope.settingsSection(
     Column(modifier = Modifier.fillMaxWidth(), content = content)
 }
 
-/**
- * The small coloured caption above a group.
- *
- * 1.2.9: it can carry the AI mark. Several groups are a single segmented selector
- * with no row in them - the endpoint mode, the protocol, the IP family - so the
- * caption is the only place an icon for that option can honestly sit.
- */
+/** Small coloured caption above a settings group. */
 @Composable
 fun GroupCaption(text: String) {
     Text(text = text, style = MaterialTheme.typography.labelLarge,
@@ -775,36 +769,16 @@ fun SettingsActionRow(
 fun SettingsBlock(
     title: String? = null,
     helper: String? = null,
-    /**
-     * 1.2.9: a block hosts a full-width control instead of a row, so its AI icon
-     * sits on the block's own header line rather than in a row's trailing slot -
-     * and the header line is drawn for the icon alone when the block has no title,
-     * because several blocks are just a labelled text field.
-     */
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp)) {
         if (title != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Exactly one weighted child, so a long label uses the whole
-                // line and an untitled block still pushes the mark to the end.
-                if (title != null) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = OnDarkMuted,
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-                Spacer(Modifier.width(10.dp))
-            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = OnDarkMuted,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+            )
         }
         content()
         if (!helper.isNullOrBlank()) {
