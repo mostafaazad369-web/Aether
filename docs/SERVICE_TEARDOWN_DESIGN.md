@@ -426,3 +426,9 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - A follow-up audit found that an inactive `enableLan()` queued bridge startup using only the bridge command generation. A later `disableLan()` invalidated the LAN request generation but did not invalidate that queued bridge command; the startup could therefore overwrite the newer LAN intent by setting `lanRequested = true`.
 - LAN-triggered startup now carries the LAN request generation into `startSyncForGeneration()` and is rejected under the bridge monitor if that request has since been superseded. Ordinary loopback starts remain independent and are not cancelled by `disableLan()`.
 - Added a JVM policy regression test asserting that a later LAN disable invalidates the queued LAN intent while leaving the independent bridge command current. This is still a generation-policy test, not an Android listener/socket integration test; build, tests and device behavior remain unverified.
+
+### ShareBridge listener ownership seam (2026-11-25)
+
+- Extracted the LAN listener collection into `ShareListenerRegistry`, which owns add, retain/remove, ordering, snapshots and idempotent close-all behavior. `ShareBridge` uses this registry for its actual LAN listener set; callers continue to serialize mutations under the bridge monitor.
+- Added JVM tests with fake listeners to verify that removed listeners are closed, retained listeners stay open, close-all closes each owned listener once, and ordering does not alter ownership.
+- These tests exercise the production registry/cleanup primitive, but do not simulate Android socket binding, accept-loop races, scheduler ordering, or active client-socket teardown. Those remain follow-up integration concerns; no build/test result is claimed.
