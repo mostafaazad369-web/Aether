@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.data.AiSettings
 import studio.cluvex.aether.data.GeminiStore
@@ -113,7 +114,48 @@ enum class AiAdviceProblem {
  * Nothing in here touches the network unless [AiGate] says it can, and every
  * request is dialled through the tunnel's SOCKS proxy - see [GeminiHttp].
  */
+/** Thread-safe monotonic token used to reject stale AI work. */
+internal class AiSessionGeneration {
+    private var value = 0L
+
+    @Synchronized
+    fun current(): Long = value
+
+    @Synchronized
+    fun advance(): Long = ++value
+
+    @Synchronized
+    fun isCurrent(generation: Long): Boolean = value == generation
+}
+
 object AiSession {
+    /** Invalidates every result produced under a previous credential/session. */
+    private val sessionGeneration = AiSessionGeneration()
+    private val sessionLock = Any()
+
+    private fun isCurrentSession(generation: Long): Boolean =
+        sessionGeneration.isCurrent(generation)
+
+    private fun runIfCurrentSession(generation: Long, action: () -> Unit): Boolean =
+        synchronized(sessionLock) {
+            if (!isCurrentSession(generation)) false else {
+                action()
+                true
+            }
+        }
+
+    /** Called synchronously before a key mutation becomes visible to background work. */
+    private fun invalidateAiSession() {
+        synchronized(sessionLock) { sessionGeneration.advance() }
+        chatJob?.cancel()
+        adviceJob?.cancel()
+        discoveryJob?.cancel()
+        _thinking.value = false
+        _discovering.value = false
+        _probe.value = AiProbe.Idle
+        _advice.value = AiAdviceState.Idle
+        clearAiSessionData()
+    }
     private var appContext: Context? = null
 
     /**
@@ -191,6 +233,7 @@ object AiSession {
 
     private var chatJob: Job? = null
     private var adviceJob: Job? = null
+    private var discoveryJob: Job? = null
 
     /** Millis of the last automatic analysis, so a reconnect storm cannot spam it. */
     @Volatile
@@ -247,6 +290,7 @@ object AiSession {
     fun setKey(key: String) {
         val trimmed = key.trim()
         keySaveJob?.cancel()
+        invalidateAiSession()
         _forgetResult.value = null
         _storageError.value = null
         // A draft is not a credential: disable all requests until the write commits.
@@ -315,6 +359,7 @@ object AiSession {
 
     fun forget() {
         keySaveJob?.cancel()
+        invalidateAiSession()
         _keySaving.value = true
         _forgetResult.value = null
         _storageError.value = null
@@ -354,7 +399,7 @@ object AiSession {
         _advice.value = AiAdviceState.Idle
         _messages.value = emptyList()
         _queuedQuestion.value = null
-        explainCache.clear()
+        synchronized(explainCache) { explainCache.clear() }
     }
 
     // ---- gate ------------------------------------------------------------
@@ -398,19 +443,25 @@ object AiSession {
         }
         _discovering.value = true
         _probe.value = AiProbe.Running
-        scope.launch {
-            val port = AiAvailability.socksPort(profile.backend, state)
-            when (val result = GeminiClient.listModels(current.apiKey, port)) {
+        val generation = sessionGeneration.current()
+        discoveryJob = scope.launch {
+            try {
+                val port = AiAvailability.socksPort(profile.backend, state)
+                val result = GeminiClient.listModels(current.apiKey, port)
+                if (!isCurrentSession(generation)) return@launch
+                when (result) {
                 is AiResult.Ok -> {
                     // GeminiClient has already applied the allow-list; re-applying
                     // is cheap and means this stays correct if the client ever
                     // stops doing it.
                     _models.value = AiModelPolicy.filter(result.value)
+                    if (!isCurrentSession(generation)) return@launch
                     when (val saved = store?.saveDiscovered(_models.value.map { it.id })) {
                         GeminiStore.OperationResult.Success -> _storageError.value = null
                         is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
                         null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
                     }
+                    if (!isCurrentSession(generation)) return@launch
                     // 1.4.0-r5: the app's own pick (not a deliberate user choice)
                     // always follows the default policy - Gemini 3.1 Flash-Lite
                     // first, for its higher free daily allowance. A model the USER
@@ -419,6 +470,7 @@ object AiSession {
                     if (current.model.isBlank() || !chosenStillOffered || !current.modelUserPicked) {
                         AiModelPolicy.pickDefault(_models.value)?.let {
                             if (it != current.model || current.modelUserPicked) {
+                                if (!isCurrentSession(generation)) return@launch
                                 when (val saved = store?.saveModel(it, byUser = false)) {
                                     GeminiStore.OperationResult.Success -> _storageError.value = null
                                     is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
@@ -427,6 +479,7 @@ object AiSession {
                             }
                         }
                     }
+                    if (!isCurrentSession(generation)) return@launch
                     _probe.value = AiProbe.Ok(
                         modelCount = _models.value.size,
                         via = profile.backend.pipelineLabel,
@@ -434,11 +487,14 @@ object AiSession {
                     DiagnosticsLog.i("ai", "model discovery: ${_models.value.size} usable model(s)")
                 }
                 is AiResult.Err -> {
+                    if (!isCurrentSession(generation)) return@launch
                     _probe.value = AiProbe.Failed(result.message, result.kind)
                     DiagnosticsLog.w("ai", "model discovery failed: ${result.kind}")
                 }
             }
-            _discovering.value = false
+            } finally {
+                if (isCurrentSession(generation)) _discovering.value = false
+            }
         }
     }
 
@@ -469,10 +525,14 @@ object AiSession {
         persian: Boolean,
         currentValue: String? = null,
     ): AiResult<String> {
+        val generation = sessionGeneration.current()
         val current = _settings.value
         val value = currentValue ?: topic.profileKey?.let { AiPatch.read(profile, it) }
         val cacheKey = "${topic.id}|$value|${if (persian) "fa" else "en"}|${current.effectiveModel}"
-        synchronized(explainCache) { explainCache[cacheKey] }?.let { return AiResult.Ok(it) }
+        synchronized(explainCache) { explainCache[cacheKey] }?.let {
+            if (!isCurrentSession(generation)) throw CancellationException("AI session changed")
+            return AiResult.Ok(it)
+        }
 
         val gate = gate(state, profile)
         if (!gate.ready) return AiResult.Err(gate.name, AiErrorKind.TRANSPORT)
@@ -493,8 +553,10 @@ object AiSession {
                 temperature = 0.2,
                 maxOutputTokens = 700,
             )
+            if (!isCurrentSession(generation)) throw CancellationException("AI session changed")
             if (result is AiResult.Ok) {
                 synchronized(explainCache) {
+                    if (!isCurrentSession(generation)) throw CancellationException("AI session changed")
                     explainCache[cacheKey] = result.value
                     while (explainCache.size > EXPLAIN_CACHE_MAX) {
                         val oldest = explainCache.keys.firstOrNull() ?: break
@@ -547,7 +609,10 @@ object AiSession {
 
         _thinking.value = true
         chatJob?.cancel()
+        val generation = sessionGeneration.current()
         chatJob = scope.launch {
+            try {
+                if (!isCurrentSession(generation)) return@launch
             // History EXCLUDING failure bubbles: a "you are not connected" notice is
             // an app message, not something the model said, and feeding it back
             // would have the model apologising for an error it never made.
@@ -602,7 +667,9 @@ object AiSession {
                 temperature = CHAT_TEMPERATURE,
                 maxOutputTokens = budget,
             )
+            if (!isCurrentSession(generation)) return@launch
             var result = ask(history, CHAT_TOKENS)
+            if (!isCurrentSession(generation)) return@launch
             // A cut-off answer is worth exactly one more try with room to finish.
             // This is the visible half of the truncation bug: the model had used
             // its whole budget and the bubble showed a sentence that stopped
@@ -611,6 +678,7 @@ object AiSession {
             if (result is AiResult.Err && result.kind == AiErrorKind.TRUNCATED) {
                 DiagnosticsLog.i("ai", "chat answer was truncated; retrying with a larger budget")
                 result = ask(history, CHAT_TOKENS_RETRY)
+                if (!isCurrentSession(generation)) return@launch
             }
             when (val outcome = result) {
                 is AiResult.Ok -> {
@@ -629,6 +697,7 @@ object AiSession {
                     // model gets the verified facts and rewrites the whole answer
                     // before the user sees any of it. The revised answer goes
                     // through the same filter; there is no second round.
+                    if (!isCurrentSession(generation)) return@launch
                     val feedback = AiPatch.verificationFeedback(profile, patch)
                     if (feedback != null) {
                         DiagnosticsLog.i(
@@ -636,11 +705,13 @@ object AiSession {
                             "chat: ${patch.rejected.size} proposal(s) failed verification; " +
                                 "asking the model to revise",
                         )
+                        if (!isCurrentSession(generation)) return@launch
                         val revised = ask(
                             history + GeminiTurn(fromUser = false, text = raw) +
                                 GeminiTurn(fromUser = true, text = AiPrompts.chatRevision(feedback)),
                             CHAT_TOKENS_RETRY,
                         )
+                        if (!isCurrentSession(generation)) return@launch
                         if (revised is AiResult.Ok) {
                             val split = AiPrompts.splitChatReply(revised.value)
                             if (split.first.isNotBlank()) {
@@ -653,6 +724,7 @@ object AiSession {
                             DiagnosticsLog.w("ai", "chat: revision round failed; showing the verified original")
                         }
                     }
+                    if (!isCurrentSession(generation)) return@launch
                     appendMessage(
                         AiMessage(
                             id = nextId(),
@@ -662,7 +734,9 @@ object AiSession {
                         ),
                     )
                 }
-                is AiResult.Err -> appendMessage(
+                is AiResult.Err -> {
+                    if (!isCurrentSession(generation)) return@launch
+                    appendMessage(
                     AiMessage(
                         id = nextId(),
                         fromUser = false,
@@ -671,9 +745,12 @@ object AiSession {
                         errorKind = outcome.kind,
                         sourcePrompt = prompt,
                     ),
-                )
+                    )
+                }
             }
-            _thinking.value = false
+            } finally {
+                if (isCurrentSession(generation)) _thinking.value = false
+            }
         }
     }
 
@@ -829,7 +906,10 @@ object AiSession {
 
         _advice.value = AiAdviceState.Running
         adviceJob?.cancel()
+        val generation = sessionGeneration.current()
         adviceJob = scope.launch {
+            try {
+                if (!isCurrentSession(generation)) return@launch
             // Belt as well as braces. The redactor is hardened line-by-line now
             // (see AiRedaction.safeRedactLine), but building the digest is the one
             // step here that runs BEFORE any network call and therefore before any
@@ -865,6 +945,7 @@ object AiSession {
              * removes most of what the tolerant extractor in AiPrompts had to
              * survive, and most of what made this answer unparsable.
              */
+            if (!isCurrentSession(generation)) return@launch
             suspend fun requestAdvice(budget: Int, strict: Boolean) = GeminiClient.generate(
                 apiKey = current.apiKey,
                 socksPort = AiAvailability.socksPort(profile.backend, state),
@@ -884,9 +965,11 @@ object AiSession {
             // five change objects, in Persian, where a character costs more tokens
             // than it does in English. See AiErrorKind.TRUNCATED.
             var result = requestAdvice(ADVICE_TOKENS, strict = false)
+            if (!isCurrentSession(generation)) return@launch
             if (result is AiResult.Err && result.kind == AiErrorKind.TRUNCATED) {
                 DiagnosticsLog.i("ai", "advisor answer was truncated; retrying with a larger budget")
                 result = requestAdvice(ADVICE_TOKENS_RETRY, strict = true)
+                if (!isCurrentSession(generation)) return@launch
             }
             when (result) {
                 is AiResult.Ok -> {
@@ -900,7 +983,9 @@ object AiSession {
                         // model is not cooperating; two failures in a row is a
                         // model problem, not a transient one.
                         DiagnosticsLog.w("ai", "advisor answer did not match the contract; re-asking")
+                        if (!isCurrentSession(generation)) return@launch
                         val second = requestAdvice(ADVICE_TOKENS_RETRY, strict = true)
+                        if (!isCurrentSession(generation)) return@launch
                         parsed = (second as? AiResult.Ok)?.let { AiPrompts.parseAdvice(it.value) }
                         if (second is AiResult.Ok) parsedFrom = second.value
                     }
@@ -917,12 +1002,14 @@ object AiSession {
                     // repeats the user's current value (or names an invalid one) is
                     // handed back with the real values, once, and the corrected
                     // answer replaces the first if it parses.
+                    if (!isCurrentSession(generation)) return@launch
                     val feedback = AiPatch.verificationFeedback(profile, validated)
                     if (feedback != null) {
                         DiagnosticsLog.i(
                             "ai",
                             "advisor: ${validated.rejected.size} proposal(s) failed verification; re-asking",
                         )
+                        if (!isCurrentSession(generation)) return@launch
                         val revised = GeminiClient.generate(
                             apiKey = current.apiKey,
                             socksPort = AiAvailability.socksPort(profile.backend, state),
@@ -937,6 +1024,7 @@ object AiSession {
                             maxOutputTokens = ADVICE_TOKENS_RETRY,
                             jsonOutput = true,
                         )
+                        if (!isCurrentSession(generation)) return@launch
                         val reparsed = (revised as? AiResult.Ok)?.let { AiPrompts.parseAdvice(it.value) }
                         if (reparsed != null) {
                             parsed = reparsed
@@ -950,8 +1038,12 @@ object AiSession {
                             "advisor: ${validated.rejected.size} proposal(s) refused by the allow-list",
                         )
                     }
+                    if (!isCurrentSession(generation)) return@launch
                     val autoApplied = current.autoApply && advice.changes.isNotEmpty()
-                    if (autoApplied) onApply(validated.profile)
+                    if (autoApplied && !runIfCurrentSession(generation) { onApply(validated.profile) }) {
+                        return@launch
+                    }
+                    if (!isCurrentSession(generation)) return@launch
                     _advice.value = AiAdviceState.Ready(
                         advice = advice,
                         atMillis = System.currentTimeMillis(),
@@ -964,9 +1056,15 @@ object AiSession {
                     )
                 }
                 is AiResult.Err -> {
+                    if (!isCurrentSession(generation)) return@launch
                     val outcome = result as AiResult.Err
                     _advice.value = AiAdviceState.Failed(outcome.message, kind = outcome.kind)
                     DiagnosticsLog.w("ai", "advisor failed: ${outcome.kind}")
+                }
+            }
+            } finally {
+                if (!isCurrentSession(generation) && _advice.value is AiAdviceState.Running) {
+                    _advice.value = AiAdviceState.Idle
                 }
             }
         }
