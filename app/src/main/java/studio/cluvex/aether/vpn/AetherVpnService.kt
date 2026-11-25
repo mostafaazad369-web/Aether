@@ -255,6 +255,13 @@ class AetherVpnService : VpnService() {
     /** Active userspace filter bridge (only when per-app blocking is on). */
     private var tunBridge: SocksTunBridge? = null
 
+    /**
+     * Serializes TUN creation/start with teardown. In particular, onDestroy and
+     * stopEverything may run on different threads while a connect coroutine is
+     * between establishTun() and startTun2Socks().
+     */
+    private val nativeLifecycleLock = Any()
+
     /** Last profile the service ran with (kill-switch decisions). */
     private var lastProfile: ConnectionProfile? = null
 
@@ -2566,40 +2573,53 @@ class AetherVpnService : VpnService() {
         }
     }
 
-    private fun establishTun(profile: ConnectionProfile) {
-        // 1.2.7-r3: a chained session's exit is a Psiphon server, and those are
-        // IPv4-only in practice. See [buildTun] for why the TUN then carries no
-        // IPv6 ADDRESS while still routing ::/0.
-        var withoutIpv6Address = profile.backend.isChained
-        var descriptor = runCatching { buildTun(profile, withoutIpv6Address).establish() }
-            .getOrNull()
-        if (descriptor == null && withoutIpv6Address) {
-            // Some ROMs refuse an interface that routes a family it has no
-            // address for. Falling back keeps the mode working exactly as it did
-            // before; the front's AAAA suppression then carries the fix alone.
-            DiagnosticsLog.w(
-                TAG,
-                "This device would not establish an IPv4-only-addressed TUN; re-establishing " +
-                    "with the IPv6 address. AAAA suppression in the Psiphon front still applies.",
-            )
-            withoutIpv6Address = false
-            descriptor = runCatching { buildTun(profile, false).establish() }.getOrNull()
-        }
-        tun = descriptor ?: throw IllegalStateException("Failed to establish the VPN interface")
+    private suspend fun establishTun(profile: ConnectionProfile) {
+        val context = currentCoroutineContext()
+        synchronized(nativeLifecycleLock) {
+            context.ensureActive()
+            // 1.2.7-r3: a chained session's exit is a Psiphon server, and those are
+            // IPv4-only in practice. See [buildTun] for why the TUN then carries no
+            // IPv6 ADDRESS while still routing ::/0.
+            var withoutIpv6Address = profile.backend.isChained
+            var descriptor = runCatching { buildTun(profile, withoutIpv6Address).establish() }
+                .getOrNull()
+            if (descriptor == null && withoutIpv6Address) {
+                // Some ROMs refuse an interface that routes a family it has no
+                // address for. Falling back keeps the mode working exactly as it did
+                // before; the front's AAAA suppression then carries the fix alone.
+                DiagnosticsLog.w(
+                    TAG,
+                    "This device would not establish an IPv4-only-addressed TUN; re-establishing " +
+                        "with the IPv6 address. AAAA suppression in the Psiphon front still applies.",
+                )
+                withoutIpv6Address = false
+                descriptor = runCatching { buildTun(profile, false).establish() }.getOrNull()
+            }
+            val established = descriptor ?: throw IllegalStateException("Failed to establish the VPN interface")
+            try {
+                // If cancellation arrived while Android was establishing the
+                // interface, do not publish a descriptor into a dead session.
+                context.ensureActive()
+            } catch (cancelled: CancellationException) {
+                runCatching { established.close() }
+                throw cancelled
+            }
+            tun = established
 
-        val mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX)
-        DiagnosticsLog.i(
-            TAG,
-            "TUN established: ipv4=${TunnelConfig.TUN_IPV4}/${TunnelConfig.TUN_IPV4_PREFIX} " +
-                "ipv6=" + (
-                if (withoutIpv6Address) {
-                    "none (::/0 routed, so nothing leaks and the resolver stops returning AAAA)"
-                } else {
-                    "${TunnelConfig.TUN_IPV6}/${TunnelConfig.TUN_IPV6_PREFIX}"
-                }
-                ) + " mtu=$mtu split=${profile.splitMode} apps=${profile.splitApps.size} " +
-                "dns=${TunnelConfig.DNS_SERVERS}",
-        )
+            val mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX)
+            DiagnosticsLog.i(
+                TAG,
+                "TUN established: ipv4=${TunnelConfig.TUN_IPV4}/${TunnelConfig.TUN_IPV4_PREFIX} " +
+                    "ipv6=" + (
+                    if (withoutIpv6Address) {
+                        "none (::/0 routed, so nothing leaks and the resolver stops returning AAAA)"
+                    } else {
+                        "${TunnelConfig.TUN_IPV6}/${TunnelConfig.TUN_IPV6_PREFIX}"
+                    }
+                    ) + " mtu=$mtu split=${profile.splitMode} apps=${profile.splitApps.size} " +
+                    "dns=${TunnelConfig.DNS_SERVERS}",
+            )
+        }
     }
 
     /**
@@ -2748,38 +2768,61 @@ class AetherVpnService : VpnService() {
      * would silently forward the whole device through stage 1 and hand the user
      * an Aether exit IP while the UI promised a Psiphon exit.
      */
-    private fun startTun2Socks(profile: ConnectionProfile, socksPort: Int) {
-        activeForwardPort = socksPort
-        if (profile.blockedApps.isNotEmpty()) {
-            // PER-APP BLOCKING (1.2.4): hev-socks5-tunnel cannot filter per
-            // UID, so a userspace filter bridge (merged into Aether's
-            // SocksTunBridge) reads the TUN itself, resolves each flow's
-            // owning app and drops blocked apps' packets. It is activated
-            // ONLY when blocking is configured; the battle-tested hev path
-            // below stays the default for everyone else.
-            val pfd = tun ?: throw IllegalStateException("TUN descriptor is null")
-            val bridge = SocksTunBridge(
-                vpnService = this,
-                tunDescriptor = pfd,
-                socksHost = SOCKS_HOST,
-                socksPort = socksPort,
-                mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
-                blockedPackagesProvider = { profile.blockedApps.toSet() },
-                routingEngine = RoutingEngine(emptyList()),
-            )
-            DiagnosticsLog.i(TAG, "Starting userspace filter bridge (blocked apps=${profile.blockedApps.size})")
-            bridge.start()
-            tunBridge = bridge
-            return
+    private suspend fun startTun2Socks(profile: ConnectionProfile, socksPort: Int) {
+        val context = currentCoroutineContext()
+        synchronized(nativeLifecycleLock) {
+            context.ensureActive()
+            activeForwardPort = socksPort
+            if (profile.blockedApps.isNotEmpty()) {
+                // PER-APP BLOCKING (1.2.4): hev-socks5-tunnel cannot filter per
+                // UID, so a userspace filter bridge (merged into Aether's
+                // SocksTunBridge) reads the TUN itself, resolves each flow's
+                // owning app and drops blocked apps' packets. It is activated
+                // ONLY when blocking is configured; the battle-tested hev path
+                // below stays the default for everyone else.
+                val pfd = tun ?: throw IllegalStateException("TUN descriptor is null")
+                val bridge = SocksTunBridge(
+                    vpnService = this,
+                    tunDescriptor = pfd,
+                    socksHost = SOCKS_HOST,
+                    socksPort = socksPort,
+                    mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
+                    blockedPackagesProvider = { profile.blockedApps.toSet() },
+                    routingEngine = RoutingEngine(emptyList()),
+                )
+                // Publish ownership before starting workers so teardown can never
+                // miss a partially-started bridge. The lifecycle lock prevents
+                // teardown from observing it until start has returned or failed.
+                tunBridge = bridge
+                try {
+                    DiagnosticsLog.i(TAG, "Starting userspace filter bridge (blocked apps=${profile.blockedApps.size})")
+                    bridge.start()
+                    context.ensureActive()
+                } catch (failure: Throwable) {
+                    runCatching { bridge.stop() }
+                    if (tunBridge === bridge) tunBridge = null
+                    throw failure
+                }
+                return
+            }
+            val config = writeHevConfig(profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX), socksPort)
+            // Use the LIVE fd of the ParcelFileDescriptor (do NOT detach): hev uses it
+            // while running and we close the pfd ourselves on teardown. The fd is only
+            // valid inside THIS process, which is exactly why hev must run in-process.
+            val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
+            DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
+            // Mark ownership before entering JNI: if native start throws after
+            // accepting a generation, the common cleanup path still requests stop.
+            tunnelStarted = true
+            try {
+                HevTunnel.start(config.absolutePath, fd)
+                context.ensureActive()
+            } catch (failure: Throwable) {
+                runCatching { HevTunnel.stop() }
+                tunnelStarted = false
+                throw failure
+            }
         }
-        val config = writeHevConfig(profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX), socksPort)
-        // Use the LIVE fd of the ParcelFileDescriptor (do NOT detach): hev uses it
-        // while running and we close the pfd ourselves on teardown. The fd is only
-        // valid inside THIS process, which is exactly why hev must run in-process.
-        val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
-        DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
-        HevTunnel.start(config.absolutePath, fd)
-        tunnelStarted = true
     }
 
     /**
@@ -3089,7 +3132,7 @@ class AetherVpnService : VpnService() {
     }
 
     /** Stops sharing, the forwarder and the engine but deliberately KEEPS [tun]. */
-    private fun cleanupForwardingOnly() {
+    private fun cleanupForwardingOnly() = synchronized(nativeLifecycleLock) {
         stopTrackedRaceEngines()
         activeForwardPort = 0
         sessionExitPort = 0
@@ -3130,7 +3173,7 @@ class AetherVpnService : VpnService() {
     }
 
     /** (Re)builds the TUN as a full-tunnel blackhole: routes everything, reads nothing. */
-    private fun ensureLockdownTun(profile: ConnectionProfile) {
+    private fun ensureLockdownTun(profile: ConnectionProfile) = synchronized(nativeLifecycleLock) {
         runCatching { tun?.close() }
         tun = null
         val builder = Builder()
@@ -3165,7 +3208,7 @@ class AetherVpnService : VpnService() {
      * enrichment cannot land on the next session. No default reason on purpose: a
      * new call site must say why it kills the natives.
      */
-    private fun cleanupNativeOnly(reason: String) {
+    private fun cleanupNativeOnly(reason: String) = synchronized(nativeLifecycleLock) {
         val newEpoch = sessionEpoch.incrementAndGet()
         runCatching {
             ChainTrace.stage(
@@ -3283,9 +3326,19 @@ class AetherVpnService : VpnService() {
 
     override fun onDestroy() {
         if (live === this) live = null
-        runJob?.cancel()
-        cleanupNativeOnly("service-destroyed")
-        stopCustom()
+        // Invalidate pending stop/lockdown finalizers before synchronous teardown.
+        // Otherwise an older stopJob can race onDestroy and publish stale UI state
+        // after the service has already begun destruction.
+        stopGeneration.incrementAndGet()
+        val activeRun = runJob
+        runJob = null
+        activeRun?.cancel()
+        stopJob?.cancel()
+        stopJob = null
+        synchronized(nativeLifecycleLock) {
+            cleanupNativeOnly("service-destroyed")
+            stopCustom()
+        }
         // 1.3.1: the service can also die WITHOUT going through stopEverything -
         // task removal, a system kill, the user revoking VPN consent. Every one of
         // those left the widget showing whatever transient text it had last. The
