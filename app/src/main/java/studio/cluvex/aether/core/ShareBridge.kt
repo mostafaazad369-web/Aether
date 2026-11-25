@@ -358,8 +358,8 @@ object ShareBridge {
         closeAllLocked()
         uploadBytesCounter.set(0L)
         downloadBytesCounter.set(0L)
-        liveConnections.set(0)
-        liveLanClients.set(0)
+        // Counts are process-wide active handlers, not per-listener-session state.
+        // Old accepted clients may still be unwinding after their listener closes.
         _lanClients.value = 0
         refusals.set(0L)
         lanClientSeen = false
@@ -888,11 +888,10 @@ object ShareBridge {
                 return false
             }
         }
-        if (liveConnections.get() >= MAX_LIVE_CONNECTIONS) {
+        if (!ShareConnectionCapacity.tryAcquire(liveConnections, MAX_LIVE_CONNECTIONS)) {
             noteRefusal("the $MAX_LIVE_CONNECTIONS simultaneous-connection limit")
             return false
         }
-        liveConnections.incrementAndGet()
         if (via != null) {
             _lanClients.value = liveLanClients.incrementAndGet()
             if (!lanClientSeen) {
