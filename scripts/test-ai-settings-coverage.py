@@ -2,7 +2,8 @@
 """Regression guard for the retired in-app AI assistant.
 
 The VPN remains independent of external AI providers. This check prevents the
-removed assistant runtime, navigation and contextual-help UI from reappearing.
+removed assistant runtime, navigation, contextual-help UI and active feature
+documentation from reappearing.
 """
 from pathlib import Path
 import sys
@@ -14,6 +15,19 @@ FORBIDDEN = (
     "AiTopic", "aiTopic =", "AiTopicIcon", "LocalAiHost", "AiAdvisorPage", "AiChatScreen",
     "R.string.ai_",
 )
+ACTIVE_DOCS = (
+    "README.md",
+    "README.fa.md",
+    "docs/CI_REPAIR_1.6.0.fa.md",
+    "docs/TAB_CHAIN_REPAIR_1.6.0.md",
+    "docs/TAB_CHAIN_REPAIR_1.6.0.fa.md",
+)
+RETIRED_DOC_MARKERS = (
+    "Gemini AI assistant",
+    "Gemini API request",
+    "live Gemini responses",
+    "دستیار هوش مصنوعی Gemini",
+)
 
 def main():
     failures = []
@@ -22,10 +36,13 @@ def main():
         for marker in FORBIDDEN:
             if marker in text:
                 failures.append(f"{path.relative_to(ROOT)} still references {marker}")
-    for readme_name in ("README.md", "README.fa.md"):
-        readme = (ROOT / readme_name).read_text(encoding="utf-8").lower()
-        if "gemini ai assistant" in readme or "optional gemini" in readme or "دستیار هوش مصنوعی gemini" in readme:
-            failures.append(f"{readme_name} still advertises the retired assistant")
+    for relative in ACTIVE_DOCS:
+        path = ROOT / relative
+        text = path.read_text(encoding="utf-8")
+        lowered = text.lower()
+        for marker in RETIRED_DOC_MARKERS:
+            if marker.lower() in lowered:
+                failures.append(f"{relative} still documents the retired assistant")
     for directory in (ROOT / "app/src/main/res/values", ROOT / "app/src/main/res/values-fa"):
         xml = directory / "strings.xml"
         if 'name="ai_' in xml.read_text(encoding="utf-8"):
