@@ -459,11 +459,15 @@ object AiSession {
         val gate = gate(state, profile)
         if (!isCurrentSession(generation)) return
         if (!current.hasKey) {
-            _probe.value = AiProbe.Failed("no key", AiErrorKind.BAD_KEY)
+            runIfCurrentSession(generation) {
+                _probe.value = AiProbe.Failed("no key", AiErrorKind.BAD_KEY)
+            }
             return
         }
         if (gate == AiGate.DISCONNECTED || gate == AiGate.WRONG_MODE) {
-            _probe.value = AiProbe.Failed(gate.name, AiErrorKind.TRANSPORT, gate = gate)
+            runIfCurrentSession(generation) {
+                _probe.value = AiProbe.Failed(gate.name, AiErrorKind.TRANSPORT, gate = gate)
+            }
             return
         }
         if (!runIfCurrentSession(generation) {
@@ -480,16 +484,19 @@ object AiSession {
                     // GeminiClient has already applied the allow-list; re-applying
                     // is cheap and means this stays correct if the client ever
                     // stops doing it.
-                    _models.value = AiModelPolicy.filter(result.value)
-                    if (!isCurrentSession(generation)) return@launch
+                    if (!runIfCurrentSession(generation) {
+                            _models.value = AiModelPolicy.filter(result.value)
+                        }) return@launch
                     val savedDiscovery = keyMutationMutex.withLock {
                         if (isCurrentSession(generation)) store?.saveDiscovered(_models.value.map { it.id }) else null
                     }
                     if (!isCurrentSession(generation)) return@launch
-                    when (savedDiscovery) {
-                        GeminiStore.OperationResult.Success -> _storageError.value = null
-                        is GeminiStore.OperationResult.Failed -> _storageError.value = savedDiscovery.error
-                        null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                    runIfCurrentSession(generation) {
+                        when (savedDiscovery) {
+                            GeminiStore.OperationResult.Success -> _storageError.value = null
+                            is GeminiStore.OperationResult.Failed -> _storageError.value = savedDiscovery.error
+                            null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                        }
                     }
                     if (!isCurrentSession(generation)) return@launch
                     // 1.4.0-r5: the app's own pick (not a deliberate user choice)
@@ -505,29 +512,35 @@ object AiSession {
                                     if (isCurrentSession(generation)) store?.saveModel(it, byUser = false) else null
                                 }
                                 if (!isCurrentSession(generation)) return@launch
-                                when (savedModel) {
-                                    GeminiStore.OperationResult.Success -> _storageError.value = null
-                                    is GeminiStore.OperationResult.Failed -> _storageError.value = savedModel.error
-                                    null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                                runIfCurrentSession(generation) {
+                                    when (savedModel) {
+                                        GeminiStore.OperationResult.Success -> _storageError.value = null
+                                        is GeminiStore.OperationResult.Failed -> _storageError.value = savedModel.error
+                                        null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                                    }
                                 }
                             }
                         }
                     }
                     if (!isCurrentSession(generation)) return@launch
-                    _probe.value = AiProbe.Ok(
-                        modelCount = _models.value.size,
-                        via = profile.backend.pipelineLabel,
-                    )
+                    runIfCurrentSession(generation) {
+                        _probe.value = AiProbe.Ok(
+                            modelCount = _models.value.size,
+                            via = profile.backend.pipelineLabel,
+                        )
+                    }
                     DiagnosticsLog.i("ai", "model discovery: ${_models.value.size} usable model(s)")
                 }
                 is AiResult.Err -> {
                     if (!isCurrentSession(generation)) return@launch
-                    _probe.value = AiProbe.Failed(result.message, result.kind)
+                    runIfCurrentSession(generation) {
+                        _probe.value = AiProbe.Failed(result.message, result.kind)
+                    }
                     DiagnosticsLog.w("ai", "model discovery failed: ${result.kind}")
                 }
             }
             } finally {
-                if (isCurrentSession(generation)) _discovering.value = false
+                runIfCurrentSession(generation) { _discovering.value = false }
             }
         }
     }
@@ -633,16 +646,18 @@ object AiSession {
         if (!isCurrentSession(generation)) return
         if (!gate.ready) {
             if (!isCurrentSession(generation)) return
-            appendMessage(
-                AiMessage(
-                    id = nextId(),
-                    fromUser = false,
-                    text = "",
-                    failed = true,
-                    gate = gate,
-                    sourcePrompt = prompt,
-                ),
-            )
+            runIfCurrentSession(generation) {
+                appendMessage(
+                    AiMessage(
+                        id = nextId(),
+                        fromUser = false,
+                        text = "",
+                        failed = true,
+                        gate = gate,
+                        sourcePrompt = prompt,
+                    ),
+                )
+            }
             return
         }
 
@@ -763,32 +778,36 @@ object AiSession {
                         }
                     }
                     if (!isCurrentSession(generation)) return@launch
-                    appendMessage(
-                        AiMessage(
-                            id = nextId(),
-                            fromUser = false,
-                            text = visible.ifBlank { raw.trim() },
-                            changes = patch.applied,
-                        ),
-                    )
+                    runIfCurrentSession(generation) {
+                        appendMessage(
+                            AiMessage(
+                                id = nextId(),
+                                fromUser = false,
+                                text = visible.ifBlank { raw.trim() },
+                                changes = patch.applied,
+                            ),
+                        )
+                    }
                 }
                 is AiResult.Err -> {
                     if (!isCurrentSession(generation)) return@launch
-                    appendMessage(
-                    AiMessage(
-                        id = nextId(),
-                        fromUser = false,
-                        text = outcome.message,
-                        failed = true,
-                        errorKind = outcome.kind,
-                        sourcePrompt = prompt,
-                    ),
-                    )
+                    runIfCurrentSession(generation) {
+                        appendMessage(
+                            AiMessage(
+                                id = nextId(),
+                                fromUser = false,
+                                text = outcome.message,
+                                failed = true,
+                                errorKind = outcome.kind,
+                                sourcePrompt = prompt,
+                            ),
+                        )
+                    }
                 }
             }
             } finally {
-                if (isCurrentSession(generation) && chatJob === coroutineContext[Job]) {
-                    _thinking.value = false
+                runIfCurrentSession(generation) {
+                    if (chatJob === coroutineContext[Job]) _thinking.value = false
                 }
             }
         }
@@ -941,7 +960,9 @@ object AiSession {
         }
         val gate = gate(state, profile)
         if (!gate.ready) {
-            if (!auto) _advice.value = AiAdviceState.Failed(gate.name, gate = gate)
+            if (!auto) runIfCurrentSession(generation) {
+                _advice.value = AiAdviceState.Failed(gate.name, gate = gate)
+            }
             return
         }
         if (_advice.value is AiAdviceState.Running) return
@@ -964,7 +985,7 @@ object AiSession {
                 )
             }.getOrElse { t ->
                 DiagnosticsLog.e("ai", "could not build a redacted digest, analysis skipped: $t")
-                if (isCurrentSession(generation)) {
+                runIfCurrentSession(generation) {
                     _advice.value = AiAdviceState.Failed(
                         "log digest failed",
                         reason = AiAdviceProblem.EMPTY_LOG,
@@ -974,10 +995,12 @@ object AiSession {
             }
             if (!isCurrentSession(generation)) return@launch
             if (digest.isBlank()) {
-                _advice.value = AiAdviceState.Failed(
-                    "empty log",
-                    reason = AiAdviceProblem.EMPTY_LOG,
-                )
+                runIfCurrentSession(generation) {
+                    _advice.value = AiAdviceState.Failed(
+                        "empty log",
+                        reason = AiAdviceProblem.EMPTY_LOG,
+                    )
+                }
                 return@launch
             }
 
@@ -1034,10 +1057,12 @@ object AiSession {
                         if (second is AiResult.Ok) parsedFrom = second.value
                     }
                     if (parsed == null) {
-                        _advice.value = AiAdviceState.Failed(
-                            "unreadable answer",
-                            reason = AiAdviceProblem.UNREADABLE,
-                        )
+                        runIfCurrentSession(generation) {
+                            _advice.value = AiAdviceState.Failed(
+                                "unreadable answer",
+                                reason = AiAdviceProblem.UNREADABLE,
+                            )
+                        }
                         DiagnosticsLog.w("ai", "advisor answer could not be parsed as JSON")
                         return@launch
                     }
@@ -1088,11 +1113,13 @@ object AiSession {
                         return@launch
                     }
                     if (!isCurrentSession(generation)) return@launch
-                    _advice.value = AiAdviceState.Ready(
-                        advice = advice,
-                        atMillis = System.currentTimeMillis(),
-                        applied = autoApplied,
-                    )
+                    runIfCurrentSession(generation) {
+                        _advice.value = AiAdviceState.Ready(
+                            advice = advice,
+                            atMillis = System.currentTimeMillis(),
+                            applied = autoApplied,
+                        )
+                    }
                     DiagnosticsLog.i(
                         "ai",
                         "advisor: ${advice.changes.size} tuning change(s) proposed" +
@@ -1102,15 +1129,17 @@ object AiSession {
                 is AiResult.Err -> {
                     if (!isCurrentSession(generation)) return@launch
                     val outcome = result as AiResult.Err
-                    _advice.value = AiAdviceState.Failed(outcome.message, kind = outcome.kind)
+                    runIfCurrentSession(generation) {
+                        _advice.value = AiAdviceState.Failed(outcome.message, kind = outcome.kind)
+                    }
                     DiagnosticsLog.w("ai", "advisor failed: ${outcome.kind}")
                 }
             }
             } finally {
-                if (isCurrentSession(generation) && adviceJob === coroutineContext[Job] &&
-                    _advice.value is AiAdviceState.Running
-                ) {
-                    _advice.value = AiAdviceState.Idle
+                runIfCurrentSession(generation) {
+                    if (adviceJob === coroutineContext[Job] && _advice.value is AiAdviceState.Running) {
+                        _advice.value = AiAdviceState.Idle
+                    }
                 }
             }
         }
