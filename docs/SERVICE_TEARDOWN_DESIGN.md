@@ -389,3 +389,17 @@ This leaves a stale-start ordering case: `start()` can enqueue its thread; `stop
 Fix ShareBridge command ordering before introducing a broad resource registry. Give every public start/stop command a monotonically increasing command generation reserved synchronously at API entry. A queued start must verify that its generation is still current before opening listeners; a queued stop must close only the generation it owns and must not close a newer start. Preserve synchronous `startSync()` semantics by making it participate in the same command-generation protocol. Add deterministic JVM tests for start-then-stop-before-start-worker-runs, stop-then-new-start, and stale stop completion after a newer start. Do not change the UI's asynchronous API or LAN exposure defaults.
 
 Do not claim the ShareBridge race is fixed until those tests and the actual implementation are committed.
+## Follow-up implementation — ShareBridge command generations (2026-11-25)
+
+`ShareBridge` now reserves a monotonically increasing command generation synchronously when public `start()` and `startSync()` requests enter. The asynchronous `start()` worker passes its reserved generation into `startSyncForGeneration()`; the worker checks that the generation is still current after acquiring the ShareBridge monitor and refuses stale queued starts.
+
+`stop()` also reserves a generation before entering its synchronized state transition. It advances the existing listener session only if its generation remains current, and its asynchronous close worker checks both the command generation and listener session immediately before closing. Therefore a stop worker superseded by a later start cannot close the newer start's listeners.
+
+Three JVM tests were added in `ShareCommandGenerationTest.kt`: queued start invalidated by stop, newer start superseding an earlier stop, and stale stop completion being rejected after a newer start.
+
+### Scope and remaining caveats
+
+- These tests exercise the generation primitive deterministically; they do not instantiate Android sockets or prove end-to-end listener behavior. A future injectable listener/worker boundary should add integration-style ordering tests.
+- `enableLan()`, `disableLan()`, `setMode()` and route-change watcher commands still have their own asynchronous workers and are not yet covered by a single command-order protocol. Review their interaction with full bridge stop before claiming every ShareBridge control is serialized.
+- `stop()` still needs to acquire the ShareBridge monitor before it can reserve the listener-session transition. If `startSyncForGeneration()` is doing synchronous bind/setup work under that monitor, stop latency can include that work. Measure this on-device; do not move cleanup to an unowned executor as a workaround.
+- This change does not provide process-level ownership after Service destruction and does not guarantee that all active client relay threads have terminated when `stop()` returns.
