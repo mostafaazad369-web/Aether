@@ -24,6 +24,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -170,13 +171,44 @@ class SocksTunBridge(
     }
 
     fun stop() {
+        // Stop packet intake before tearing down flow sessions. The VPN service
+        // remains the sole owner of the TUN descriptor and closes it afterwards.
+        val workersStopped = workerGroup.stop()
+        closeSessions()
+        executor.shutdownNow()
+
+        val sessionsStopped = try {
+            executor.awaitTermination(500, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+
+        // A packet already being dispatched when shutdown began may have raced
+        // the first sweep. Reap any such late session after the executor settles.
+        closeSessions()
+        if (!workersStopped) {
+            LogRepository.w("TUN worker did not exit within the bounded stop wait; descriptor owner must close the TUN")
+        }
+        if (!sessionsStopped) {
+            LogRepository.w("TUN flow workers did not exit within the bounded stop wait")
+        }
+    }
+
+    private fun closeSessions() {
         tcpSessions.values.forEach { it.close() }
         tcpSessions.clear()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
-        executor.shutdownNow()
-        if (!workerGroup.stop()) {
-            LogRepository.w("TUN worker did not exit within the bounded stop wait; descriptor owner must close the TUN")
+    }
+
+    private fun executeSession(task: () -> Unit, onRejected: () -> Unit) {
+        try {
+            executor.execute(task)
+        } catch (_: RejectedExecutionException) {
+            // Stop may shut down the executor while the reader is dispatching a
+            // final packet. Do not leave its just-created session in the maps.
+            onRejected()
         }
     }
 
@@ -292,7 +324,10 @@ class SocksTunBridge(
                 val seq = getLong(packet, hLen + 4)
                 val newSession = TcpSession(key, 4, srcBytes, dstBytes, srcPort, dstPort, seq, uid)
                 tcpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    tcpSessions.remove(key, newSession)
+                    newSession.close()
+                }
             }
         } else {
             if (len < hLen + 8) return
@@ -345,7 +380,10 @@ class SocksTunBridge(
 
                 val newSession = UdpSession(key, 4, srcBytes, dstBytes, srcPort, dstPort, uid)
                 udpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    udpSessions.remove(key, newSession)
+                    newSession.close()
+                }
                 newSession.queue(payload)
             }
         }
@@ -415,7 +453,10 @@ class SocksTunBridge(
                 val seq = getLong(packet, offset + 4)
                 val newSession = TcpSession(key, 6, srcIp, dstIp, srcPort, dstPort, seq, uid)
                 tcpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    tcpSessions.remove(key, newSession)
+                    newSession.close()
+                }
             }
         } else if (transport.nextHeader == 17) {
             if (len < offset + 8) return
@@ -463,7 +504,10 @@ class SocksTunBridge(
 
                 val newSession = UdpSession(key, 6, srcIp, dstIp, srcPort, dstPort, uid)
                 udpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    udpSessions.remove(key, newSession)
+                    newSession.close()
+                }
                 newSession.queue(payload)
             }
         }
