@@ -423,12 +423,16 @@ object ShareBridge {
      * Used by the Share card's switch.
      */
     fun enableLan() {
-        val (generation, shouldStart) = synchronized(this) {
+        val (generation, startGeneration) = synchronized(this) {
             lanRequested = true
-            lanRequestGeneration.reserve() to !_active.value
+            val requestGeneration = lanRequestGeneration.reserve()
+            val pendingStart = if (_active.value) null else commandGeneration.reserve()
+            requestGeneration to pendingStart
         }
-        if (shouldStart) {
-            start(localOnly = false)
+        if (startGeneration != null) {
+            thread(name = "share-lan-start", isDaemon = true) {
+                startSyncForGeneration(localOnly = false, upstreamPort = null, generation = startGeneration)
+            }
             return
         }
         thread(name = "share-lan-on", isDaemon = true) {
