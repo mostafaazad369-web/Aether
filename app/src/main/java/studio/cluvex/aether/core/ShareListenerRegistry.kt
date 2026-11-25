@@ -31,7 +31,7 @@ internal class ShareListenerRegistry<T>(
         }
     }
 
-    fun sortBy(selector: (T) -> Comparable<*>?) {
+    fun <R : Comparable<R>> sortBy(selector: (T) -> R?) {
         entries.sortBy(selector)
     }
 
