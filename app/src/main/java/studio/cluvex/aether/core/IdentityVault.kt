@@ -72,7 +72,7 @@ object IdentityVault {
         val sealed = dir.listFiles { f: File ->
             f.isFile && f.name.endsWith(SEALED_SUFFIX) &&
                 IDENTITY.matches(f.name.removeSuffix(SEALED_SUFFIX))
-        } ?: return
+        } ?: return@synchronized
         var restored = 0
         for (blobFile in sealed) {
             val target = File(dir, blobFile.name.removeSuffix(SEALED_SUFFIX))
