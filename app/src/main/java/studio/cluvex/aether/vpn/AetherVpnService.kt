@@ -512,6 +512,12 @@ class AetherVpnService : VpnService() {
                 previousRun.join()
             }
             try {
+                // HEV stop is asynchronous. Do not establish a replacement TUN or
+                // start a new native generation until the old pthread has returned
+                // and closed its duplicated descriptor.
+                check(HevTunnel.awaitStopped()) {
+                    "Previous HEV worker did not exit; refusing to start an overlapping tunnel."
+                }
                 val profile = hydrateSecrets(rawProfile)
                 lastProfile = profile
                 connectFlow(profile)
