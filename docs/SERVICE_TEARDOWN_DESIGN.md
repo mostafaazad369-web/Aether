@@ -403,3 +403,18 @@ Three JVM tests were added in `ShareCommandGenerationTest.kt`: queued start inva
 - `enableLan()`, `disableLan()`, `setMode()` and route-change watcher commands still have their own asynchronous workers and are not yet covered by a single command-order protocol. Review their interaction with full bridge stop before claiming every ShareBridge control is serialized.
 - `stop()` still needs to acquire the ShareBridge monitor before it can reserve the listener-session transition. If `startSyncForGeneration()` is doing synchronous bind/setup work under that monitor, stop latency can include that work. Measure this on-device; do not move cleanup to an unowned executor as a workaround.
 - This change does not provide process-level ownership after Service destruction and does not guarantee that all active client relay threads have terminated when `stop()` returns.
+## ShareBridge LAN/configuration command guards (2026-11-25)
+
+The follow-up implementation now also guards the asynchronous LAN controls and refresh workers:
+
+- `enableLan()` and `disableLan()` reserve a shared LAN-request generation and update `lanRequested` under the ShareBridge monitor. Their queued workers verify the generation and current intent before opening or closing LAN listeners. A newer enable/disable request supersedes an older queued worker.
+- `stop()` invalidates pending LAN-request and LAN-configuration workers inside the same synchronized state transition that marks the bridge inactive. This prevents stale LAN workers from reopening listeners after teardown.
+- `setMode()` and `noteEngineRoutes()` reserve a separate LAN-configuration generation while updating their state under the monitor. Their refresh workers verify the latest generation and current active/LAN-requested state before rebinding.
+- JVM generation-policy tests now cover LAN enable/disable ordering, latest configuration refresh, and invalidation of pending LAN/configuration workers by stop.
+
+### Remaining verification limits
+
+- The added tests exercise the generation primitive, not real Android listener binding or concurrent execution of the complete ShareBridge API. A controllable listener/worker seam is still needed for deterministic integration tests.
+- `startSyncForGeneration()` performs bind/setup work while holding the ShareBridge monitor. A concurrent `stop()` may therefore wait for that work before it can mark the bridge inactive; measure this latency on-device.
+- `attach()`, credentials/auth changes, client relay threads, and the watcher lifecycle are not converted into one process-level resource owner by these changes.
+- No claim is made that Service destruction now waits for all ShareBridge resources to terminate.
