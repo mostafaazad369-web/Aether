@@ -243,7 +243,7 @@ object ShareBridge {
     private var loSocks: ServerSocket? = null
     private var loHttp: ServerSocket? = null
     /** r6: one listener pair PER share interface. Guarded by the object lock. */
-    private val lanListeners = mutableListOf<LanListener>()
+    private val lanListeners = ShareListenerRegistry<LanListener> { it.close() }
 
     /** Immutable snapshot of the bound share interfaces, for lock-free admission. */
     @Volatile
@@ -588,16 +588,12 @@ object ShareBridge {
         // r6: follow the SET of share interfaces, not one. Close what is gone or
         // dead, bind what is new, keep what still works (its clients stay up).
         var changed = false
-        val iterator = lanListeners.iterator()
-        while (iterator.hasNext()) {
-            val listener = iterator.next()
-            val stillWanted = targets.any { it.address == listener.target.address }
-            if (!stillWanted || listener.socks.isClosed || listener.http.isClosed) {
-                listener.close()
-                iterator.remove()
-                changed = true
-            }
+        val previousListenerCount = lanListeners.snapshot().size
+        lanListeners.retain { listener ->
+            targets.any { it.address == listener.target.address } &&
+                !listener.socks.isClosed && !listener.http.isClosed
         }
+        if (lanListeners.snapshot().size != previousListenerCount) changed = true
         if (_authRequired.value && _proxyPassword.value.isBlank()) {
             _proxyPassword.value = LanGuard.randomPassword()
         }
@@ -614,7 +610,7 @@ object ShareBridge {
                 busy++
                 continue
             }
-            lanListeners += LanListener(target, socks, http)
+            lanListeners.add(LanListener(target, socks, http))
             acceptLoop("share-socks-lan", socks, via = target) { c -> serveSocksClient(c) }
             acceptLoop("share-http-lan", http, via = target) { c -> serveHttpClient(c) }
             changed = true
@@ -633,7 +629,7 @@ object ShareBridge {
         lanListeners.sortBy { listener ->
             order.indexOf(listener.target.address).let { if (it < 0) Int.MAX_VALUE else it }
         }
-        lanTargets = lanListeners.map { it.target }
+        lanTargets = lanListeners.snapshot().map { it.target }
         val endpoints = lanTargets.map {
             LanEndpoint(
                 address = it.address.hostAddress.orEmpty().substringBefore('%'),
@@ -817,8 +813,7 @@ object ShareBridge {
     }
 
     private fun closeLanLocked() {
-        lanListeners.forEach { it.close() }
-        lanListeners.clear()
+        lanListeners.closeAll()
         lanTargets = emptyList()
         _lanEndpoint.value = null
         _lanEndpoints.value = emptyList()
