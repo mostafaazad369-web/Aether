@@ -448,3 +448,11 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Accepted client sockets are registered before handler-thread handoff. Full bridge teardown closes all registered clients; LAN-only teardown closes LAN clients while preserving loopback clients. When a LAN interface disappears during watcher reconciliation, clients associated with that interface are also closed.
 - Handler completion removes its socket from the registry and releases the existing connection counters. Socket close is expected to unblock TCP reads/relay; UDP association cleanup follows its existing control-socket termination path.
 - Added a registry policy test for LAN-only removal while loopback ownership remains. This does not constitute a real ServerSocket accept/stop stress test, Android integration test, or proof that every relay worker has terminated. Upstream TCP sockets are still closed by their handler finally paths after client-side unblocking; there is no separate process-wide upstream-socket registry yet. Build, tests and device behavior remain unverified.
+
+
+### ShareBridge upstream socket ownership (2026-11-25)
+
+- Each accepted client now owns its upstream TCP socket legs in the same `ActiveClient` record. The ownership record is registered before the upstream connect/handshake begins, so teardown can interrupt even a still-connecting or greeting-blocked socket.
+- All upstream creation paths pass the owning client: loopback SOCKS relay, LAN SOCKS CONNECT and UDP control, and HTTP CONNECT/plain HTTP via `socksOpen`. Registration is rejected if teardown has already removed the client record.
+- Closing an active-client record closes all its upstream sockets and then its client socket. Cleanup is guarded by an atomic once flag, so competing teardown/handler completion paths do not repeat socket closure. UDP datagram sockets remain handler-local; closing the client control socket unblocks its control read, after which the handler closes both datagram sockets and the upstream control socket and joins its relay workers with bounded waits.
+- Added a JVM test using tracking Socket fakes to verify client and upstream closure is idempotent. This tests the ownership record, not real TCP connect/accept behavior, UDP socket wakeup, or thread termination on Android. Build and test execution are not verified.
