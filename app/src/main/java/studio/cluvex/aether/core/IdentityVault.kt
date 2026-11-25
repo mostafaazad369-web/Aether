@@ -68,7 +68,7 @@ object IdentityVault {
     private val IDENTITY = Regex("^aether(?:[A-Za-z0-9._-]*)\\.toml(?:\\.corrupt)?$")
 
     /** Restores every sealed identity file into [dir]. Call before spawning. */
-    fun unsealInto(dir: File) {
+    fun unsealInto(dir: File) = synchronized(engineLock) {
         val sealed = dir.listFiles { f: File ->
             f.isFile && f.name.endsWith(SEALED_SUFFIX) &&
                 IDENTITY.matches(f.name.removeSuffix(SEALED_SUFFIX))
