@@ -204,7 +204,7 @@ class SocksTunBridge(
 
     private fun executeSession(task: () -> Unit, onRejected: () -> Unit) {
         try {
-            executor.execute(task)
+            executor.execute { task() }
         } catch (_: RejectedExecutionException) {
             // Stop may shut down the executor while the reader is dispatching a
             // final packet. Do not leave its just-created session in the maps.
