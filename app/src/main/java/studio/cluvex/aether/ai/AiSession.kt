@@ -129,12 +129,19 @@ internal class AiSessionGeneration {
 
     @Synchronized
     fun isCurrent(generation: Long): Boolean = value == generation
+
+    /** Publishes a result atomically with respect to generation advancement. */
+    @Synchronized
+    fun runIfCurrent(generation: Long, action: () -> Unit): Boolean {
+        if (value != generation) return false
+        action()
+        return true
+    }
 }
 
 object AiSession {
     /** Invalidates every result produced under a previous credential/session. */
     private val sessionGeneration = AiSessionGeneration()
-    private val sessionLock = Any()
     /** Serializes the two credential mutations across overlapping UI actions. */
     private val keyMutationMutex = Mutex()
 
@@ -142,16 +149,11 @@ object AiSession {
         sessionGeneration.isCurrent(generation)
 
     private fun runIfCurrentSession(generation: Long, action: () -> Unit): Boolean =
-        synchronized(sessionLock) {
-            if (!isCurrentSession(generation)) false else {
-                action()
-                true
-            }
-        }
+        sessionGeneration.runIfCurrent(generation, action)
 
     /** Called synchronously before a key mutation becomes visible to background work. */
     private fun invalidateAiSession() {
-        synchronized(sessionLock) { sessionGeneration.advance() }
+        sessionGeneration.advance()
         chatJob?.cancel()
         adviceJob?.cancel()
         discoveryJob?.cancel()
