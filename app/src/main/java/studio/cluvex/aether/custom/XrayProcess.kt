@@ -3,6 +3,7 @@ package studio.cluvex.aether.custom
 import android.util.Log
 import studio.cluvex.aether.BuildConfig
 import studio.cluvex.aether.core.DiagnosticsLog
+import studio.cluvex.aether.core.ProcessReaper
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -31,6 +32,7 @@ class XrayProcess(
     /** True when this APK carries the Xray core at all. */
     fun available(): Boolean = File(nativeLibDir, BINARY).exists()
 
+    @Synchronized
     fun start(configJson: String, tag: String) {
         val hasLeafPin = Regex("\"pinnedPeerCertSha256\"\\s*:").containsMatchIn(configJson)
         val modern = File(nativeLibDir, "libxray-pinned.so")
@@ -38,7 +40,7 @@ class XrayProcess(
             "This config requires leaf-certificate pinning, unsupported by bundled Xray v25.12.8. A compatible libxray-pinned.so is required; the pin was NOT bypassed.")
         val bin = if (hasLeafPin) modern else File(nativeLibDir, BINARY)
         if (!bin.exists()) throw IllegalStateException(MISSING)
-        stop()
+        check(stop()) { "Previous Xray process has not been confirmed reaped; refusing to start another." }
         val dir = File(workDir, "xray").apply { mkdirs() }
         val file = File(dir, "config-$tag.json")
         file.writeText(configJson)
@@ -76,17 +78,25 @@ class XrayProcess(
 
     fun isAlive(): Boolean = process?.isAlive == true
 
-    fun stop() {
+    /**
+     * Stops Xray and confirms OS exit before deleting its credential-bearing config.
+     * On an unconfirmed exit, retain both handles so a later teardown can retry.
+     */
+    @Synchronized
+    fun stop(): Boolean {
         val proc = process
-        process = null
-        if (proc != null) {
-            runCatching {
-                proc.destroy()
-                if (!proc.waitFor(GRACEFUL_EXIT_MS, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
+        if (proc != null && !runCatching { ProcessReaper.terminateAndReap(proc) }.getOrDefault(false)) {
+            DiagnosticsLog.w(LOG_TAG, "Xray exit is not confirmed after SIGKILL; retaining its process and config references.")
+            return false
+        }
+        if (proc != null) process = null
+        configFile?.let { file ->
+            if (file.exists() && !runCatching { file.delete() }.getOrDefault(false)) {
+                DiagnosticsLog.w(LOG_TAG, "Could not delete the stopped Xray config file: ${file.name}")
             }
         }
-        configFile?.let { runCatching { it.delete() } }
         configFile = null
+        return true
     }
 
     companion object {
