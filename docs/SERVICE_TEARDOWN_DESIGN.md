@@ -409,6 +409,8 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 
 - `enableLan()` and `disableLan()` reserve a shared LAN-request generation and update `lanRequested` under the ShareBridge monitor. Their queued workers verify the generation and current intent before opening or closing LAN listeners. A newer enable/disable request supersedes an older queued worker.
 - `stop()` invalidates pending LAN-request and LAN-configuration workers inside the same synchronized state transition that marks the bridge inactive. This prevents stale LAN workers from reopening listeners after teardown.
+
+- When `enableLan()` must start an inactive bridge, it now reserves the bridge-start generation in the same synchronized API-entry transition as its LAN-request generation. Its queued startup is therefore superseded by a later `stop()` rather than racing to call `start()` after the stop.
 - `setMode()` and `noteEngineRoutes()` reserve a separate LAN-configuration generation while updating their state under the monitor. Their refresh workers verify the latest generation and current active/LAN-requested state before rebinding.
 - JVM generation-policy tests now cover LAN enable/disable ordering, latest configuration refresh, and invalidation of pending LAN/configuration workers by stop.
 
