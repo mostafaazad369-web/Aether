@@ -287,6 +287,10 @@ object ShareBridge {
      * resurrect listeners after a newer stop request.
      */
     private val commandGeneration = ShareCommandGeneration()
+    /** Orders LAN enable/disable intent independently from bridge start/stop. */
+    private val lanRequestGeneration = ShareCommandGeneration()
+    /** Coalesces mode/engine-route refresh workers without cancelling LAN intent. */
+    private val lanConfigGeneration = ShareCommandGeneration()
 
     /** Loopback SOCKS5 port every shared connection is relayed INTO. */
     @Volatile
@@ -392,6 +396,8 @@ object ShareBridge {
         // critical section yet becomes stale immediately, not when stop's
         // background cleanup thread eventually runs.
         val generation = commandGeneration.reserve()
+        lanRequestGeneration.reserve()
+        lanConfigGeneration.reserve()
         val stopSession = synchronized(this) {
             // A newer start may have superseded this stop while it waited for
             // the monitor. In that case this stop must not mutate the new run.
@@ -417,6 +423,7 @@ object ShareBridge {
      * Used by the Share card's switch.
      */
     fun enableLan() {
+        val generation = lanRequestGeneration.reserve()
         lanRequested = true
         if (!_active.value) {
             start(localOnly = false)
@@ -424,7 +431,9 @@ object ShareBridge {
         }
         thread(name = "share-lan-on", isDaemon = true) {
             synchronized(this) {
-                if (!_active.value) return@thread
+                if (!lanRequestGeneration.isCurrent(generation) || !_active.value || !lanRequested) {
+                    return@thread
+                }
                 ensureLanLocked()
                 startWatcherLocked()
             }
@@ -436,10 +445,12 @@ object ShareBridge {
      * needs them - r4 stopped the whole bridge here and broke proxy mode).
      */
     fun disableLan() {
+        val generation = lanRequestGeneration.reserve()
         lanRequested = false
         _lanStatus.value = LanStatus.OFF
         thread(name = "share-lan-off", isDaemon = true) {
             synchronized(this) {
+                if (!lanRequestGeneration.isCurrent(generation) || lanRequested) return@thread
                 val had = lanListeners.isNotEmpty()
                 closeLanLocked()
                 if (had) DiagnosticsLog.i(TAG, "LAN sharing OFF (loopback proxy kept)")
@@ -451,9 +462,14 @@ object ShareBridge {
     fun setMode(mode: ShareLeakGuard.Mode) {
         if (_mode.value == mode) return
         _mode.value = mode
+        val generation = lanConfigGeneration.reserve()
         if (!_active.value || !lanRequested) return
         thread(name = "share-mode", isDaemon = true) {
-            synchronized(this) { if (_active.value) ensureLanLocked() }
+            synchronized(this) {
+                if (lanConfigGeneration.isCurrent(generation) && _active.value && lanRequested) {
+                    ensureLanLocked()
+                }
+            }
         }
     }
 
@@ -500,9 +516,14 @@ object ShareBridge {
                     "session so a shared device can never leave outside the tunnel.",
             )
         }
+        val generation = lanConfigGeneration.reserve()
         if (_active.value && lanRequested) {
             thread(name = "share-routes", isDaemon = true) {
-                synchronized(this) { if (_active.value) ensureLanLocked() }
+                synchronized(this) {
+                    if (lanConfigGeneration.isCurrent(generation) && _active.value && lanRequested) {
+                        ensureLanLocked()
+                    }
+                }
             }
         }
     }
