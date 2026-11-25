@@ -182,11 +182,14 @@ object ShareBridge {
     internal class ActiveClient(val socket: Socket, val viaAddress: InetAddress?) {
         /** Guarded by ShareBridge's monitor; includes every upstream TCP leg. */
         val upstreams = linkedSetOf<Socket>()
+        /** Guarded by ShareBridge's monitor; UDP receive workers own these too. */
+        val datagrams = linkedSetOf<DatagramSocket>()
         private val closed = AtomicBoolean(false)
 
         fun close() {
             if (!closed.compareAndSet(false, true)) return
             upstreams.toList().forEach { runCatching { it.close() } }
+            datagrams.toList().forEach { runCatching { it.close() } }
             runCatching { socket.close() }
         }
     }
@@ -1121,6 +1124,9 @@ object ShareBridge {
         }
         var clientSide: DatagramSocket? = null
         var upstreamSide: DatagramSocket? = null
+        var upWorker: Thread? = null
+        var downWorker: Thread? = null
+        var upstreamWatchWorker: Thread? = null
         try {
             // Ask the upstream for ITS relay. DST 0.0.0.0:0 - the upstream sees
             // our loopback datagram socket, not the LAN client.
@@ -1168,8 +1174,16 @@ object ShareBridge {
             val shareAddr = client.localAddress
             val cs = DatagramSocket(InetSocketAddress(shareAddr, 0))
             clientSide = cs
+            if (!registerDatagram(client, cs)) {
+                runCatching { cs.close() }
+                return
+            }
             val us = DatagramSocket(InetSocketAddress(InetAddress.getByName(LOOPBACK), 0))
             upstreamSide = us
+            if (!registerDatagram(client, us)) {
+                runCatching { us.close() }
+                return
+            }
 
             // Tell the client where to send its datagrams.
             out.write(socksReplyBound(shareAddr, cs.localPort))
@@ -1183,7 +1197,7 @@ object ShareBridge {
             )
 
             // client -> tunnel
-            val up = thread(name = "share-udp-up", isDaemon = true) {
+            upWorker = thread(name = "share-udp-up", isDaemon = true) {
                 val buf = ByteArray(MAX_UDP_DATAGRAM)
                 val packet = DatagramPacket(buf, buf.size)
                 try {
@@ -1221,7 +1235,7 @@ object ShareBridge {
                 }
             }
             // tunnel -> client
-            val down = thread(name = "share-udp-down", isDaemon = true) {
+            downWorker = thread(name = "share-udp-down", isDaemon = true) {
                 val buf = ByteArray(MAX_UDP_DATAGRAM)
                 val packet = DatagramPacket(buf, buf.size)
                 try {
@@ -1238,22 +1252,24 @@ object ShareBridge {
             }
 
             // The association ends when EITHER control connection ends.
-            val upstreamWatch = thread(name = "share-udp-ctl", isDaemon = true) {
+            upstreamWatchWorker = thread(name = "share-udp-ctl", isDaemon = true) {
                 runCatching { while (upIn.read() >= 0) { /* drain */ } }
                 runCatching { client.shutdownInput() }
             }
             runCatching { while (client.getInputStream().read() >= 0) { /* drain */ } }
-            runCatching { cs.close() }
-            runCatching { us.close() }
-            runCatching { upstream.close() }
-            runCatching { up.join(1_000) }
-            runCatching { down.join(1_000) }
-            runCatching { upstreamWatch.join(1_000) }
         } catch (_: Exception) {
         } finally {
+            // Close receive endpoints before joining: DatagramSocket.close()
+            // releases threads blocked in receive(), including exceptional setup paths.
             runCatching { clientSide?.close() }
             runCatching { upstreamSide?.close() }
             runCatching { upstream.close() }
+            listOfNotNull(upWorker, downWorker, upstreamWatchWorker).forEach {
+                runCatching { it.join(1_000) }
+                if (it.isAlive) {
+                    DiagnosticsLog.w(TAG, "A UDP association worker did not exit within the teardown wait.")
+                }
+            }
         }
     }
 
@@ -1271,6 +1287,14 @@ object ShareBridge {
         } finally {
             runCatching { upstream.close() }
         }
+    }
+
+    /** Register a UDP endpoint under the same client/session ownership as its TCP control socket. */
+    private fun registerDatagram(client: Socket, datagram: DatagramSocket): Boolean = synchronized(this) {
+        val owner = activeClients.snapshot().firstOrNull { it.socket === client } ?: return@synchronized false
+        if (client.isClosed) return@synchronized false
+        owner.datagrams.add(datagram)
+        true
     }
 
     /**
