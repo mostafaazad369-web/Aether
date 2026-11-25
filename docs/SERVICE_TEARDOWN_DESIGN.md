@@ -432,3 +432,11 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Extracted the LAN listener collection into `ShareListenerRegistry`, which owns add, retain/remove, ordering, snapshots and idempotent close-all behavior. `ShareBridge` uses this registry for its actual LAN listener set; callers continue to serialize mutations under the bridge monitor.
 - Added JVM tests with fake listeners to verify that removed listeners are closed, retained listeners stay open, close-all closes each owned listener once, and ordering does not alter ownership.
 - These tests exercise the production registry/cleanup primitive, but do not simulate Android socket binding, accept-loop races, scheduler ordering, or active client-socket teardown. Those remain follow-up integration concerns; no build/test result is claimed.
+
+
+### ShareBridge concurrent connection admission (2026-11-25)
+
+- Replaced the non-atomic liveConnections read-then-increment check with a compare-and-set admission gate. Concurrent loopback and LAN accept loops can no longer collectively admit more than the configured 128 active handlers.
+- Removed the per-start reset of active connection counters. Closing/replacing listeners does not synchronously terminate already accepted handlers, so resetting their process-wide count could let old handlers decrement a freshly reset counter and make accounting inaccurate. Active handlers continue to occupy capacity until their existing finally path releases it.
+- Added JVM coverage for simultaneous admissions racing at the configured limit and for ordinary capacity exhaustion.
+- This is a focused capacity/accounting correction. It does not yet own or forcibly close active client/upstream sockets on stop, nor does it establish accept-vs-stop atomic handoff. Those remain open; build, tests and Android device behavior are not verified.
