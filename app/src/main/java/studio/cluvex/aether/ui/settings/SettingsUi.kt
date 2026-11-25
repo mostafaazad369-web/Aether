@@ -232,7 +232,7 @@ fun GroupCaption(text: String) {
         modifier = Modifier.padding(start = 6.dp, top = 12.dp, bottom = 8.dp))
 }
 
-/** The explanatory footnote/** The explanatory footnote under a group. */
+/** The explanatory footnote under a group. */
 @Composable
 fun GroupFooter(text: String) {
     Text(
