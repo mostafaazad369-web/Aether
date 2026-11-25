@@ -206,17 +206,14 @@ class GeminiStore(private val context: Context) {
         return editPreferences { it[Keys.models] = models.joinToString(",") }
     }
 
-    suspend fun saveAutoOptimize(enabled: Boolean) {
-        context.aiDataStore.edit { it[Keys.autoOptimize] = enabled }
-    }
+    suspend fun saveAutoOptimize(enabled: Boolean): OperationResult =
+        editPreferences { it[Keys.autoOptimize] = enabled }
 
-    suspend fun saveAutoApply(enabled: Boolean) {
-        context.aiDataStore.edit { it[Keys.autoApply] = enabled }
-    }
+    suspend fun saveAutoApply(enabled: Boolean): OperationResult =
+        editPreferences { it[Keys.autoApply] = enabled }
 
-    suspend fun saveShowHints(enabled: Boolean) {
-        context.aiDataStore.edit { it[Keys.showHints] = enabled }
-    }
+    suspend fun saveShowHints(enabled: Boolean): OperationResult =
+        editPreferences { it[Keys.showHints] = enabled }
 
     /**
      * The key is cleared first. Model preferences are erased only after the
