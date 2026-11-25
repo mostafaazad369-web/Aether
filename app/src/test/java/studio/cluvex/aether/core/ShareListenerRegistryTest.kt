@@ -1,5 +1,6 @@
 package studio.cluvex.aether.core
 
+import java.net.Socket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -73,5 +74,29 @@ class ShareListenerRegistryTest {
         assertEquals(listOf(loopback), registry.snapshot())
         assertEquals(0, loopback.closeCount)
         assertEquals(1, lan.closeCount)
+    }
+
+    @Test
+    fun closingClientOwnershipClosesClientAndEveryRegisteredUpstream() {
+        class TrackingSocket : Socket() {
+            var closes = 0
+            override fun close() {
+                closes++
+            }
+        }
+
+        val client = TrackingSocket()
+        val firstUpstream = TrackingSocket()
+        val secondUpstream = TrackingSocket()
+        val owner = ShareBridge.ActiveClient(client, viaAddress = null)
+        owner.upstreams.add(firstUpstream)
+        owner.upstreams.add(secondUpstream)
+
+        owner.close()
+        owner.close()
+
+        assertEquals(2, client.closes)
+        assertEquals(2, firstUpstream.closes)
+        assertEquals(2, secondUpstream.closes)
     }
 }
