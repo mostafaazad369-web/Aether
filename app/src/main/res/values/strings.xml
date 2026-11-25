@@ -361,13 +361,6 @@
     <string name="reset_confirm_title">Reset all settings?</string>
     <string name="reset_confirm_body">Every setting goes back to its default, including endpoint ranges, routing rules and enrolment details.</string>
     <string name="reset_confirm_ok">Reset</string>
-    <!-- =================================================================
-         1.2.9 - Gemini AI features.
-         Every key below MUST also exist in values-fa/strings.xml. A missing
-         Persian entry does not fail the build, it silently ships an English
-         sentence into a right-to-left screen, which is how a localised app
-         rots one string at a time.
-         ================================================================= -->
     <!-- key -->
     <string name="a11y_connect">Connect</string>
     <string name="a11y_disconnect">Disconnect</string>
@@ -387,14 +380,6 @@
     <!-- proposals -->
     <!-- gate -->
     <!-- errors -->
-    <!--
-      1.3.1, issues #31 and #11. Google retired the old "standard" Gemini API keys
-      during 2026: unrestricted ones stopped working on 19 June 2026 and ALL
-      standard keys are rejected from September 2026. Keys created in AI Studio
-      since then are "auth keys" bound to a Cloud service account. A key that used
-      to work and now does not is far more likely to be a retired key than a typo,
-      so the message says so first.
-    -->
     <!-- small print -->
     <!-- 1.4.0-r5: per-model guidance in the model picker -->
     <!-- Tor (1.3.0, engine core 2.0.0) -->
@@ -496,7 +481,7 @@
 
     <string-array name="about_port_improvements">
         <item>Chained Psiphon → Aether mode added: a genuinely foreign exit IP behind Aether\'s obfuscated first hop</item>
-        <item>The same chained mode fixes the plain Iranian Aether IP problem, so AI services (Gemini and others) that reject that IP open normally</item>
+        <item>The same chained mode fixes the plain Aether WARP exit-IP problem for services that reject WARP addresses</item>
         <item>Exit-country picker with flags for the chained mode, plus a SOCKS front that also carries UDP so DNS and QUIC work through it</item>
         <item>A complete native Android app: the original edition is command-line only and has no Android or Windows graphical interface</item>
         <item>One-tap system-wide VPN through Android VpnService, with no manual proxy setup</item>
