@@ -1699,8 +1699,11 @@ object ShareBridge {
         }
         pipe(client, upstream, uploadBytesCounter)
         // Keep the handler alive until the reverse half also reaches EOF.
-        // Full teardown closes both owned sockets, which unblocks either pipe.
-        runCatching { reverse.join() }
+        // Interruption closes both owned endpoints to release a blocked socket read.
+        ShareSocketRelay.joinUntilFinished(reverse) {
+            runCatching { client.close() }
+            runCatching { upstream.close() }
+        }
     }
 
     private fun pipe(from: Socket, to: Socket, counter: AtomicLong) {
