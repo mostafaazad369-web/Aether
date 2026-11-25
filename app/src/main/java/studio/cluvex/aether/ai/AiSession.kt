@@ -360,24 +360,38 @@ object AiSession {
         }
     }
 
-    private fun recordPreferenceSave(result: GeminiStore.OperationResult?) {
-        when (result) {
-            GeminiStore.OperationResult.Success -> _storageError.value = null
-            is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
-            null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+    private fun recordPreferenceSave(
+        generation: Long,
+        result: GeminiStore.OperationResult?,
+    ) {
+        runIfCurrentSession(generation) {
+            when (result) {
+                GeminiStore.OperationResult.Success -> _storageError.value = null
+                is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
+                null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+            }
         }
     }
 
     fun setAutoOptimize(enabled: Boolean) {
-        scope.launch { recordPreferenceSave(store?.saveAutoOptimize(enabled)) }
+        val generation = sessionGeneration.current()
+        scope.launch {
+            recordPreferenceSave(generation, store?.saveAutoOptimize(enabled))
+        }
     }
 
     fun setAutoApply(enabled: Boolean) {
-        scope.launch { recordPreferenceSave(store?.saveAutoApply(enabled)) }
+        val generation = sessionGeneration.current()
+        scope.launch {
+            recordPreferenceSave(generation, store?.saveAutoApply(enabled))
+        }
     }
 
     fun setShowHints(enabled: Boolean) {
-        scope.launch { recordPreferenceSave(store?.saveShowHints(enabled)) }
+        val generation = sessionGeneration.current()
+        scope.launch {
+            recordPreferenceSave(generation, store?.saveShowHints(enabled))
+        }
     }
 
     fun forget() {
