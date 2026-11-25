@@ -78,6 +78,7 @@ class BridgeWorkerGroupTest {
         group.start(listOf(replacement))
         replacement.join(1_000)
         assertFalse(replacement.isAlive)
+        assertTrue(group.stop())
     }
 
     @Test
