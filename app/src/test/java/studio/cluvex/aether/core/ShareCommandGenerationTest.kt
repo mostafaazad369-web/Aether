@@ -50,6 +50,21 @@ class ShareCommandGenerationTest {
     }
 
     @Test
+    fun laterLanDisableInvalidatesQueuedBridgeStartupWithoutCancellingLoopbackCommand() {
+        val bridgeCommands = ShareCommandGeneration()
+        val lanRequests = ShareCommandGeneration()
+
+        val queuedBridgeStart = bridgeCommands.reserve()
+        val queuedLanRequest = lanRequests.reserve()
+        val disable = lanRequests.reserve()
+
+        // The LAN intent is stale, while the independent bridge command remains current.
+        assertTrue(bridgeCommands.isCurrent(queuedBridgeStart))
+        assertFalse(lanRequests.isCurrent(queuedLanRequest))
+        assertTrue(lanRequests.isCurrent(disable))
+    }
+
+    @Test
     fun laterConfigurationRefreshSupersedesAnOlderRefresh() {
         val configRefreshes = ShareCommandGeneration()
 
