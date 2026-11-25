@@ -9,6 +9,24 @@ import java.util.concurrent.atomic.AtomicLong
  * opposite direction until its own peer closes or the owner tears down sockets.
  */
 internal object ShareSocketRelay {
+    fun joinUntilFinished(worker: Thread, onInterrupted: () -> Unit) {
+        var interrupted = false
+        try {
+            while (worker.isAlive) {
+                try {
+                    worker.join()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                    // Interrupting a joining handler must also release the worker's
+                    // blocking socket read; the owner closes both relay endpoints.
+                    runCatching { onInterrupted() }
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
     fun pipe(from: Socket, to: Socket, counter: AtomicLong) {
         val buffer = ByteArray(16 * 1024)
         try {
