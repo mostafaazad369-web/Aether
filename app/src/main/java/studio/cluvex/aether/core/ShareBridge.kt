@@ -332,8 +332,14 @@ object ShareBridge {
         localOnly: Boolean,
         upstreamPort: Int?,
         generation: Long,
+        expectedLanRequestGeneration: Long? = null,
     ): Boolean = synchronized(this) {
         if (!commandGeneration.isCurrent(generation)) return@synchronized false
+        // An inactive enableLan() queues bridge startup. A later disableLan()
+        // must invalidate that startup without cancelling ordinary loopback starts.
+        if (expectedLanRequestGeneration != null &&
+            !lanRequestGeneration.isCurrent(expectedLanRequestGeneration)
+        ) return@synchronized false
         if (upstreamPort != null) this.upstreamPort = upstreamPort
         lanRequested = !localOnly
 
@@ -431,7 +437,12 @@ object ShareBridge {
         }
         if (startGeneration != null) {
             thread(name = "share-lan-start", isDaemon = true) {
-                startSyncForGeneration(localOnly = false, upstreamPort = null, generation = startGeneration)
+                startSyncForGeneration(
+                    localOnly = false,
+                    upstreamPort = null,
+                    generation = startGeneration,
+                    expectedLanRequestGeneration = generation,
+                )
             }
             return
         }
