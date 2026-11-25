@@ -2,12 +2,43 @@ package studio.cluvex.aether.core
 
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShareSocketRelayTest {
+    @Test
+    fun interruptedJoinClosesOwnerEndpointsAndRestoresInterruptStatus() {
+        val releaseWorker = CountDownLatch(1)
+        val callerStarted = CountDownLatch(1)
+        val interruptionCleanup = AtomicBoolean(false)
+        val interruptRestored = AtomicBoolean(false)
+        val worker = Thread { releaseWorker.await() }
+        worker.start()
+
+        val caller = Thread {
+            callerStarted.countDown()
+            ShareSocketRelay.joinUntilFinished(worker) {
+                interruptionCleanup.set(true)
+                releaseWorker.countDown()
+            }
+            interruptRestored.set(Thread.currentThread().isInterrupted)
+        }
+        caller.start()
+        callerStarted.await()
+        caller.interrupt()
+        caller.join(1_000)
+        worker.join(1_000)
+
+        assertTrue("join caller should finish", !caller.isAlive)
+        assertTrue("worker should be released by interruption cleanup", !worker.isAlive)
+        assertTrue("owner cleanup should run", interruptionCleanup.get())
+        assertTrue("interrupt status should be restored", interruptRestored.get())
+    }
+
     @Test
     fun sourceHalfCloseDoesNotDisableReverseDirection() {
         ServerSocket(0).use { clientListener ->
