@@ -95,8 +95,8 @@ class ShareListenerRegistryTest {
         owner.close()
         owner.close()
 
-        assertEquals(2, client.closes)
-        assertEquals(2, firstUpstream.closes)
-        assertEquals(2, secondUpstream.closes)
+        assertEquals(1, client.closes)
+        assertEquals(1, firstUpstream.closes)
+        assertEquals(1, secondUpstream.closes)
     }
 }
