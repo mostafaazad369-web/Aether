@@ -339,8 +339,13 @@ object AiSession {
     }
 
     fun setModel(id: String) {
+        val generation = sessionGeneration.current()
         scope.launch {
-            when (val result = store?.saveModel(id, byUser = true)) {
+            val result = keyMutationMutex.withLock {
+                if (isCurrentSession(generation)) store?.saveModel(id, byUser = true) else null
+            }
+            if (!isCurrentSession(generation)) return@launch
+            when (result) {
                 GeminiStore.OperationResult.Success -> _storageError.value = null
                 is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
                 null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
@@ -451,6 +456,7 @@ object AiSession {
         val generation = sessionGeneration.current()
         val current = _settings.value
         val gate = gate(state, profile)
+        if (!isCurrentSession(generation)) return
         if (!current.hasKey) {
             _probe.value = AiProbe.Failed("no key", AiErrorKind.BAD_KEY)
             return
@@ -566,6 +572,7 @@ object AiSession {
 
 
         return withContext(Dispatchers.IO) {
+            if (!isCurrentSession(generation)) throw CancellationException("AI session changed")
             val result = GeminiClient.generate(
                 apiKey = current.apiKey,
                 socksPort = AiAvailability.socksPort(profile.backend, state),
@@ -621,6 +628,7 @@ object AiSession {
         val generation = sessionGeneration.current()
         val current = _settings.value
         val gate = gate(state, profile)
+        if (!isCurrentSession(generation)) return
         if (!gate.ready) {
             if (!isCurrentSession(generation)) return
             appendMessage(
@@ -777,7 +785,9 @@ object AiSession {
                 }
             }
             } finally {
-                if (isCurrentSession(generation)) _thinking.value = false
+                if (isCurrentSession(generation) && chatJob === coroutineContext[Job]) {
+                    _thinking.value = false
+                }
             }
         }
     }
@@ -1092,7 +1102,9 @@ object AiSession {
                 }
             }
             } finally {
-                if (!isCurrentSession(generation) && _advice.value is AiAdviceState.Running) {
+                if (isCurrentSession(generation) && adviceJob === coroutineContext[Job] &&
+                    _advice.value is AiAdviceState.Running
+                ) {
                     _advice.value = AiAdviceState.Idle
                 }
             }
