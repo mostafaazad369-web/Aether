@@ -1694,9 +1694,13 @@ object ShareBridge {
 
     /** Full-duplex pipe; every byte feeds the session traffic counters. */
     private fun relay(client: Socket, upstream: Socket) {
-        val reverse = thread(isDaemon = true) { pipe(upstream, client, downloadBytesCounter) }
+        val reverse = thread(name = "share-tcp-down", isDaemon = true) {
+            pipe(upstream, client, downloadBytesCounter)
+        }
         pipe(client, upstream, uploadBytesCounter)
-        runCatching { reverse.join(1_000) }
+        // Keep the handler alive until the reverse half also reaches EOF.
+        // Full teardown closes both owned sockets, which unblocks either pipe.
+        runCatching { reverse.join() }
     }
 
     private fun pipe(from: Socket, to: Socket, counter: AtomicLong) {
