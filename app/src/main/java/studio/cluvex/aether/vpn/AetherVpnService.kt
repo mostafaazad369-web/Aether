@@ -2306,7 +2306,16 @@ class AetherVpnService : VpnService() {
     }
 
     private suspend fun startXray(runner: XrayProcess, cfg: CustomConfig, dialVia: Int?): Int {
-        stopXrayOnly()
+        // Reserve a generation before doing any suspendable config work. A stop
+        // invalidates it, so a late config build can never resurrect Xray.
+        val generation = synchronized(xrayLock) {
+            check(xray === runner) { "Xray start was superseded before it began" }
+            xrayGeneration++
+            xrayWatch?.cancel()
+            xrayWatch = null
+            runCatching { runner.stop() }
+            xrayGeneration
+        }
         val avoid = setOf(
             PortLease.socks, PortLease.torSocks, PortLease.torFront, PortLease.chain,
             PortLease.psiphon, ShareBridge.SOCKS_SHARE_PORT, ShareBridge.HTTP_SHARE_PORT,
@@ -2336,31 +2345,52 @@ class AetherVpnService : VpnService() {
                 muxConcurrency = mux,
             )
         }
-        withContext(Dispatchers.IO) { runner.start(config, "session") }
+        currentCoroutineContext().ensureActive()
+        synchronized(xrayLock) {
+            if (generation != xrayGeneration || xray !== runner) {
+                throw CancellationException("Xray start was superseded")
+            }
+            // XrayProcess.start() calls stop() internally, so it must share this
+            // same lock with every teardown and watchdog restart.
+            runner.start(config, "session")
+        }
         val open = PortProbe.awaitOpen(SOCKS_HOST, port, XRAY_START_TIMEOUT_MS) { runner.isAlive() }
         if (!open) {
             DiagnosticsLog.e(TAG, "Xray did not open $SOCKS_HOST:$port (see the xray lines above).")
-            runner.stop()
+            synchronized(xrayLock) {
+                if (generation == xrayGeneration && xray === runner) runCatching { runner.stop() }
+                else throw CancellationException("Xray start was superseded")
+            }
             throw IllegalStateException(getString(R.string.cc_err_core_failed))
         }
         val speaksSocks = withContext(Dispatchers.IO) {
             studio.cluvex.aether.core.NetProbe.checkSocksHandshake(SOCKS_HOST, port, 2_000)
         }
         if (!speaksSocks) {
-            runner.stop()
+            synchronized(xrayLock) {
+                if (generation == xrayGeneration && xray === runner) runCatching { runner.stop() }
+                else throw CancellationException("Xray start was superseded")
+            }
             throw IllegalStateException(getString(R.string.cc_err_core_failed))
         }
+        currentCoroutineContext().ensureActive()
         DiagnosticsLog.i(
             TAG,
             "Xray core listening on $SOCKS_HOST:$port" + (dialVia?.let { " (dialling via $it)" } ?: ""),
         )
-        watchXray(runner, config)
+        synchronized(xrayLock) {
+            if (generation != xrayGeneration || xray !== runner) {
+                throw CancellationException("Xray start was superseded")
+            }
+            watchXray(runner, config, generation)
+        }
         return port
     }
 
-    /** Restarts a crashed Xray on the same port (its config is unchanged), a few times. */
-    private fun watchXray(runner: XrayProcess, config: String) {
-        val generation = synchronized(xrayLock) { ++xrayGeneration }
+    /** Restarts a crashed Xray only while the generation that started it remains current. */
+    private fun watchXray(runner: XrayProcess, config: String, generation: Int) {
+        if (generation != xrayGeneration || xray !== runner) return
+        xrayWatch?.cancel()
         xrayWatch = scope.launch(Dispatchers.IO) {
             var restarts = 0
             var healthySeconds = 0
@@ -2377,7 +2407,9 @@ class AetherVpnService : VpnService() {
                         restarts++
                         healthySeconds = 0
                         DiagnosticsLog.w(TAG, "Xray exited - restarting it ($restarts/$XRAY_MAX_RESTARTS).")
-                        runCatching { runner.start(config, "session") }
+                        if (xray === runner && generation == xrayGeneration) {
+                            runCatching { runner.start(config, "session") }
+                        }
                     }
                 }
             }
@@ -2457,9 +2489,14 @@ class AetherVpnService : VpnService() {
 
     /** Everything the custom-config code started; a no-op for every other session. */
     private fun stopCustom() {
-        stopXrayOnly()
-        xray = null
-        CustomSession.set(null)
+        synchronized(xrayLock) {
+            xrayGeneration++
+            xrayWatch?.cancel()
+            xrayWatch = null
+            runCatching { xray?.stop() }
+            xray = null
+            CustomSession.set(null)
+        }
     }
 
     /** The resolvers of the network the phone is really on (outside the VPN). */
@@ -3598,98 +3635,3 @@ class AetherVpnService : VpnService() {
          * port before starting a new one (1.2.2 protocol-switch fix).
          */
         private const val PORT_RELEASE_WAIT_MS = 3_000L
-
-        /**
-         * Cap for the FIRST attempt of a hand-picked protocol, so a throttled
-         * network cannot hold the user on "Connecting" for the whole scan
-         * budget before the hardened second pass is even tried.
-         */
-        private const val FIRST_PASS_MAX_MS = 75_000L
-
-        /**
-         * 1.6.0: rung 1 of [customUpstreamPlan] - TURBO's engine scan plus the
-         * identity/registration margin measured in the 2026-10-15 field log (1.6 s).
-         */
-        private const val UPSTREAM_QUICK_PASS_MAX_MS = 75_000L
-
-        /** 1.5.0: how long Xray may take to open its local SOCKS5 port. */
-        private const val XRAY_START_TIMEOUT_MS = 15_000L
-
-        /** 1.5.0: automatic Xray restarts within one session before giving up. */
-        private const val XRAY_MAX_RESTARTS = 5
-
-        /** 1.5.0: consecutive dead checks (1 s apart) before a custom session is rebuilt. */
-        private const val CUSTOM_DEAD_CONFIRMATIONS = 5
-    }
-}
-
-/**
- * 1.6.0 CHAIN TRACE: one monotonic timeline per connect, written to the
- * diagnostics log the user exports.
- *
- * The 2026-10-15 field log of `Config -> Aether` ends with "Engine output stream
- * closed" 75.2 s after the spawn, inside a 180 s SOCKS wait and a 120 s engine
- * scan budget, and no line says WHO stopped the engine and Xray within 176 ms of
- * each other. Every stage, failure category and cleanupNativeOnly(reason) now
- * lands here with its offset from the connect start, and the timeline is dumped
- * as one block whenever a chain ends, so a failure reads top to bottom.
- *
- * File-private and lock-protected; safe to call from any thread, including the
- * crash handler.
- */
-private object ChainTrace {
-    private const val TAG = "chain"
-    private const val MAX_EVENTS = 160
-    private val lock = Any()
-    private var startedAt = 0L
-    private var epoch = 0L
-    private var label = "-"
-    private val events = ArrayDeque<String>()
-
-    fun begin(epoch: Long, label: String) {
-        synchronized(lock) {
-            this.epoch = epoch
-            this.label = label
-            startedAt = SystemClock.elapsedRealtime()
-            events.clear()
-        }
-        DiagnosticsLog.i(TAG, "begin epoch=$epoch chain=$label")
-    }
-
-    fun stage(name: String, detail: String = "") = record(name, detail, warn = false)
-
-    fun warn(name: String, detail: String = "") = record(name, detail, warn = true)
-
-    /**
-     * Closes the current phase and dumps everything recorded since the last dump
-     * as one block. Events keep accumulating afterwards (supervisor restarts, the
-     * final teardown) and the next end() dumps only those.
-     */
-    fun end(outcome: String, detail: String = "") {
-        record("end", "outcome=$outcome $detail".trim(), warn = outcome != "ok")
-        val dump = synchronized(lock) {
-            val text = events.joinToString("\n  ")
-            events.clear()
-            text
-        }
-        DiagnosticsLog.i(TAG, "timeline epoch=$epoch chain=$label\n  $dump")
-    }
-
-    fun elapsedMs(): Long = synchronized(lock) {
-        if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
-    }
-
-    private fun record(name: String, detail: String, warn: Boolean) {
-        val line = "+%6.1fs %s%s".format(
-            java.util.Locale.ROOT,
-            elapsedMs() / 1000.0,
-            name,
-            if (detail.isBlank()) "" else " $detail",
-        )
-        synchronized(lock) {
-            if (events.size >= MAX_EVENTS) events.removeFirst()
-            events.addLast(line)
-        }
-        if (warn) DiagnosticsLog.w(TAG, line) else DiagnosticsLog.i(TAG, line)
-    }
-}
