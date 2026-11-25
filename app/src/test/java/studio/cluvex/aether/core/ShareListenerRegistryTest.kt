@@ -58,4 +58,20 @@ class ShareListenerRegistryTest {
         assertEquals(0, later.closeCount)
         assertEquals(0, earlier.closeCount)
     }
+
+    @Test
+    fun lanTeardownClosesLanClientsButKeepsLoopbackClientsOwned() {
+        data class Client(val lan: Boolean, var closeCount: Int = 0)
+        val registry = ShareListenerRegistry<Client> { it.closeCount++ }
+        val loopback = Client(lan = false)
+        val lan = Client(lan = true)
+        registry.add(loopback)
+        registry.add(lan)
+
+        registry.retain { !it.lan }
+
+        assertEquals(listOf(loopback), registry.snapshot())
+        assertEquals(0, loopback.closeCount)
+        assertEquals(1, lan.closeCount)
+    }
 }
