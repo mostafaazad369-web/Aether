@@ -39,6 +39,23 @@ object HevTunnel {
     fun isAlive(): Boolean = TProxyService.available && TProxyService.TProxyIsActive()
 
     /**
+     * Waits until the native worker has fully returned and released its duplicated
+     * TUN descriptor. A stop request is asynchronous; starting a replacement while
+     * the bridge is still STOP_REQUESTED is rejected by JNI.
+     *
+     * Returns false on timeout so callers fail closed rather than overlap workers.
+     */
+    suspend fun awaitStopped(timeoutMs: Long = 10_000L): Boolean {
+        if (!TProxyService.available) return true
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            while (TProxyService.TProxyIsActive()) {
+                kotlinx.coroutines.delay(25L)
+            }
+            true
+        } ?: false
+    }
+
+    /**
      * Raw cumulative counters from hev's JNI, or null when the core isn't
      * running. The array is [tx_packets, tx_bytes, rx_packets, rx_bytes].
      * Prefer [traffic] over indexing this directly — it fixes the direction.
