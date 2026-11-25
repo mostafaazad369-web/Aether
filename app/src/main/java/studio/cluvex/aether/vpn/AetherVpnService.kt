@@ -3598,40 +3598,97 @@ class AetherVpnService : VpnService() {
          * back, it repeats - and why nothing with a long-lived stream (a live
          * dubbing session, a video) ever survived a minute.
          *
-         * Port 443 is the one port every exit must allow, and a TLS handshake to
-         * it is a genuine payload round trip through the data plane, which is
-         * what the probe was supposed to be measuring in the first place. Each
-         * target is also registered with the Psiphon health watchdog (removed in 1.4.0) so it can never count
-         * as evidence against a server again, whatever port it lands on.
+        /**
+         * Cap for the FIRST attempt of a hand-picked protocol, so a throttled
+         * network cannot hold the user on "Connecting" for the whole scan
+         * budget before the hardened second pass is even tried.
          */
-        private val PROBE_TARGETS = arrayOf(
-            Triple("1.1.1.1", 443, "cloudflare-dns.com"),
-            Triple("8.8.8.8", 443, "dns.google"),
-            Triple("9.9.9.9", 443, "dns.quad9.net"),
+        private const val FIRST_PASS_MAX_MS = 75_000L
+
+        /**
+         * 1.6.0: rung 1 of [customUpstreamPlan] - TURBO's engine scan plus the
+         * identity/registration margin measured in the 2026-10-15 field log (1.6 s).
+         */
+        private const val UPSTREAM_QUICK_PASS_MAX_MS = 75_000L
+
+        /** 1.5.0: how long Xray may take to open its local SOCKS5 port. */
+        private const val XRAY_START_TIMEOUT_MS = 15_000L
+
+        /** 1.5.0: automatic Xray restarts within one session before giving up. */
+        private const val XRAY_MAX_RESTARTS = 5
+
+        /** 1.5.0: consecutive dead checks (1 s apart) before a custom session is rebuilt. */
+        private const val CUSTOM_DEAD_CONFIRMATIONS = 5
+    }
+}
+
+/**
+ * 1.6.0 CHAIN TRACE: one monotonic timeline per connect, written to the
+ * diagnostics log the user exports.
+ *
+ * The 2026-10-15 field log of `Config -> Aether` ends with "Engine output stream
+ * closed" 75.2 s after the spawn, inside a 180 s SOCKS wait and a 120 s engine
+ * scan budget, and no line says WHO stopped the engine and Xray within 176 ms of
+ * each other. Every stage, failure category and cleanupNativeOnly(reason) now
+ * lands here with its offset from the connect start, and the timeline is dumped
+ * as one block whenever a chain ends, so a failure reads top to bottom.
+ *
+ * File-private and lock-protected; safe to call from any thread, including the
+ * crash handler.
+ */
+private object ChainTrace {
+    private const val TAG = "chain"
+    private const val MAX_EVENTS = 160
+    private val lock = Any()
+    private var startedAt = 0L
+    private var epoch = 0L
+    private var label = "-"
+    private val events = ArrayDeque<String>()
+
+    fun begin(epoch: Long, label: String) {
+        synchronized(lock) {
+            this.epoch = epoch
+            this.label = label
+            startedAt = SystemClock.elapsedRealtime()
+            events.clear()
+        }
+        DiagnosticsLog.i(TAG, "begin epoch=$epoch chain=$label")
+    }
+
+    fun stage(name: String, detail: String = "") = record(name, detail, warn = false)
+
+    fun warn(name: String, detail: String = "") = record(name, detail, warn = true)
+
+    /**
+     * Closes the current phase and dumps everything recorded since the last dump
+     * as one block. Events keep accumulating afterwards (supervisor restarts, the
+     * final teardown) and the next end() dumps only those.
+     */
+    fun end(outcome: String, detail: String = "") {
+        record("end", "outcome=$outcome $detail".trim(), warn = outcome != "ok")
+        val dump = synchronized(lock) {
+            val text = events.joinToString("\n  ")
+            events.clear()
+            text
+        }
+        DiagnosticsLog.i(TAG, "timeline epoch=$epoch chain=$label\n  $dump")
+    }
+
+    fun elapsedMs(): Long = synchronized(lock) {
+        if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
+    }
+
+    private fun record(name: String, detail: String, warn: Boolean) {
+        val line = "+%6.1fs %s%s".format(
+            java.util.Locale.ROOT,
+            elapsedMs() / 1000.0,
+            name,
+            if (detail.isBlank()) "" else " $detail",
         )
-        private const val PROBE_TIMEOUT_MS = 8_000
-        private const val PROBE_RETRY_GAP_MS = 1_000L
-
-        /**
-         * Bytes the device data path must have carried since the previous check
-         * for a failed probe to be dismissed as "busy, not broken".
-         *
-         * A wedged tunnel moves nothing at all; anything above idle keepalive
-         * noise means the path works and the probe is the thing that is wrong.
-         */
-        private const val DATA_PATH_ALIVE_BYTES = 16 * 1024L
-
-        /** How often a CHAINED session's full pipeline is probed end to end (1.2.8). */
-        private const val PIPELINE_PROBE_INTERVAL_MS = 15_000L
-
-        /** And how soon it is re-probed once a check has failed. */
-        private const val PIPELINE_PROBE_RETRY_MS = 5_000L
-
-        /** Consecutive dead pipeline readings before the session is rebuilt. */
-        private const val PIPELINE_DEAD_CONFIRMATIONS = 2
-
-        /**
-         * How long to wait for the previous engine to release the local SOCKS5
-         * port before starting a new one (1.2.2 protocol-switch fix).
-         */
-        private const val PORT_RELEASE_WAIT_MS = 3_000L
+        synchronized(lock) {
+            if (events.size >= MAX_EVENTS) events.removeFirst()
+            events.addLast(line)
+        }
+        if (warn) DiagnosticsLog.w(TAG, line) else DiagnosticsLog.i(TAG, line)
+    }
+}
