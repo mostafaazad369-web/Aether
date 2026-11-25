@@ -459,8 +459,10 @@ object AiSession {
             _probe.value = AiProbe.Failed(gate.name, AiErrorKind.TRANSPORT, gate = gate)
             return
         }
-        _discovering.value = true
-        _probe.value = AiProbe.Running
+        if (!runIfCurrentSession(generation) {
+                _discovering.value = true
+                _probe.value = AiProbe.Running
+            }) return
         discoveryJob = scope.launch {
             try {
                 val port = AiAvailability.socksPort(profile.backend, state)
@@ -473,9 +475,13 @@ object AiSession {
                     // stops doing it.
                     _models.value = AiModelPolicy.filter(result.value)
                     if (!isCurrentSession(generation)) return@launch
-                    when (val saved = store?.saveDiscovered(_models.value.map { it.id })) {
+                    val savedDiscovery = keyMutationMutex.withLock {
+                        if (isCurrentSession(generation)) store?.saveDiscovered(_models.value.map { it.id }) else null
+                    }
+                    if (!isCurrentSession(generation)) return@launch
+                    when (savedDiscovery) {
                         GeminiStore.OperationResult.Success -> _storageError.value = null
-                        is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
+                        is GeminiStore.OperationResult.Failed -> _storageError.value = savedDiscovery.error
                         null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
                     }
                     if (!isCurrentSession(generation)) return@launch
@@ -488,9 +494,13 @@ object AiSession {
                         AiModelPolicy.pickDefault(_models.value)?.let {
                             if (it != current.model || current.modelUserPicked) {
                                 if (!isCurrentSession(generation)) return@launch
-                                when (val saved = store?.saveModel(it, byUser = false)) {
+                                val savedModel = keyMutationMutex.withLock {
+                                    if (isCurrentSession(generation)) store?.saveModel(it, byUser = false) else null
+                                }
+                                if (!isCurrentSession(generation)) return@launch
+                                when (savedModel) {
                                     GeminiStore.OperationResult.Success -> _storageError.value = null
-                                    is GeminiStore.OperationResult.Failed -> _storageError.value = saved.error
+                                    is GeminiStore.OperationResult.Failed -> _storageError.value = savedModel.error
                                     null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
                                 }
                             }
@@ -612,6 +622,7 @@ object AiSession {
         val current = _settings.value
         val gate = gate(state, profile)
         if (!gate.ready) {
+            if (!isCurrentSession(generation)) return
             appendMessage(
                 AiMessage(
                     id = nextId(),
@@ -625,8 +636,7 @@ object AiSession {
             return
         }
 
-        if (!isCurrentSession(generation)) return
-        _thinking.value = true
+        if (!runIfCurrentSession(generation) { _thinking.value = true }) return
         chatJob?.cancel()
         chatJob = scope.launch {
             try {
