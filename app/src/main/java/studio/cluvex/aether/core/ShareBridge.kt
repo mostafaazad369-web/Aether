@@ -18,6 +18,7 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -181,8 +182,10 @@ object ShareBridge {
     internal class ActiveClient(val socket: Socket, val viaAddress: InetAddress?) {
         /** Guarded by ShareBridge's monitor; includes every upstream TCP leg. */
         val upstreams = linkedSetOf<Socket>()
+        private val closed = AtomicBoolean(false)
 
         fun close() {
+            if (!closed.compareAndSet(false, true)) return
             upstreams.toList().forEach { runCatching { it.close() } }
             runCatching { socket.close() }
         }
