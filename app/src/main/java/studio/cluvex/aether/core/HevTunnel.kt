@@ -47,12 +47,9 @@ object HevTunnel {
      */
     suspend fun awaitStopped(timeoutMs: Long = 10_000L): Boolean {
         if (!TProxyService.available) return true
-        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
-            while (TProxyService.TProxyIsActive()) {
-                kotlinx.coroutines.delay(25L)
-            }
-            true
-        } ?: false
+        return awaitNativeWorkerStopped(timeoutMs) {
+            TProxyService.TProxyIsActive()
+        }
     }
 
     /**
@@ -112,4 +109,22 @@ object HevTunnel {
             DiagnosticsLog.w("tunnel", "TProxyStopService failed: ${t.message}")
         }
     }
+}
+
+
+/**
+ * Polls the native lifecycle gate until its detached worker has completely exited.
+ * Kept independent of JNI so timeout and completion behavior can be JVM-tested.
+ */
+internal suspend fun awaitNativeWorkerStopped(
+    timeoutMs: Long,
+    isActive: () -> Boolean,
+): Boolean {
+    require(timeoutMs > 0L) { "timeoutMs must be positive" }
+    return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        while (isActive()) {
+            kotlinx.coroutines.delay(25L)
+        }
+        true
+    } ?: false
 }
