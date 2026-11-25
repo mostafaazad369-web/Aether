@@ -40,4 +40,29 @@ class AiSessionGenerationTest {
         assertFalse(generation.isCurrent(second))
         assertTrue(generation.isCurrent(third))
     }
+
+    @Test
+    fun currentGenerationPublishesResult() {
+        val generation = AiSessionGeneration()
+        val token = generation.current()
+        var published = false
+
+        val accepted = generation.runIfCurrent(token) { published = true }
+
+        assertTrue(accepted)
+        assertTrue(published)
+    }
+
+    @Test
+    fun staleGenerationCannotPublishResult() {
+        val generation = AiSessionGeneration()
+        val stale = generation.current()
+        generation.advance()
+        var published = false
+
+        val accepted = generation.runIfCurrent(stale) { published = true }
+
+        assertFalse(accepted)
+        assertFalse(published)
+    }
 }
