@@ -2,6 +2,8 @@ package studio.cluvex.aether.data
 
 import android.content.Context
 import androidx.compose.runtime.Immutable
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -58,7 +60,10 @@ data class AiSettings(
 }
 
 /** Persists [AiSettings]; the key itself goes to the Keystore-sealed vault. */
-class GeminiStore(private val context: Context) {
+class GeminiStore(
+    private val context: Context,
+    private val dataStore: DataStore<Preferences> = context.aiDataStore,
+) {
 
     enum class StorageError {
         KEY_UNAVAILABLE,
@@ -93,7 +98,7 @@ class GeminiStore(private val context: Context) {
      * A failed Keystore read is a failed settings load, never an empty/missing key.
      * The caller can therefore fail closed instead of attempting an AI request.
      */
-    val settings: Flow<SettingsResult> = context.aiDataStore.data
+    val settings: Flow<SettingsResult> = dataStore.data
         .map { prefs ->
             when (val key = secrets.readResult(SecretStore.GEMINI_KEY)) {
                 SecretStore.ReadResult.Missing -> SettingsResult.Available(
@@ -147,14 +152,14 @@ class GeminiStore(private val context: Context) {
 
         return try {
             if (trimmed != previous) {
-                context.aiDataStore.edit { prefs ->
+                dataStore.edit { prefs ->
                     prefs[Keys.model] = ""
                     prefs[Keys.models] = ""
                     prefs[Keys.modelUserPicked] = false
                 }
             } else {
                 // Touch DataStore so settings collectors can observe the secret update.
-                context.aiDataStore.edit { prefs ->
+                dataStore.edit { prefs ->
                     prefs[Keys.model] = prefs[Keys.model] ?: ""
                 }
             }
@@ -231,7 +236,7 @@ class GeminiStore(private val context: Context) {
                 return OperationResult.Failed(StorageError.STORAGE_FAILURE)
         }
         return try {
-            context.aiDataStore.edit { prefs ->
+            dataStore.edit { prefs ->
                 prefs[Keys.model] = ""
                 prefs[Keys.models] = ""
                 prefs[Keys.modelUserPicked] = false
@@ -246,7 +251,7 @@ class GeminiStore(private val context: Context) {
     private suspend fun editPreferences(
         block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit,
     ): OperationResult = try {
-        context.aiDataStore.edit(block)
+        dataStore.edit(block)
         OperationResult.Success
     } catch (error: Throwable) {
         if (error is CancellationException) throw error

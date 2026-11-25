@@ -1,5 +1,11 @@
 package studio.cluvex.aether.data
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import java.io.IOException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -31,4 +37,23 @@ class GeminiStoreTest {
         assertTrue(settings.autoApply)
         assertFalse(settings.showHints)
     }
+    @Test
+    fun preferenceWriteFailureIsReportedAsStorageFailure() = runBlocking {
+        val failingDataStore = object : DataStore<Preferences> {
+            override val data: Flow<Preferences> = flowOf(emptyPreferences())
+
+            override suspend fun updateData(
+                transform: suspend (t: Preferences) -> Preferences,
+            ): Preferences {
+                throw IOException("simulated DataStore write failure")
+            }
+        }
+        val store = GeminiStore(RuntimeEnvironment.getApplication(), failingDataStore)
+
+        assertEquals(
+            GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE),
+            store.saveAutoOptimize(true),
+        )
+    }
+
 }
