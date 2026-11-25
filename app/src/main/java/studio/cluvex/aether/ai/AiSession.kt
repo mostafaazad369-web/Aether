@@ -306,7 +306,7 @@ object AiSession {
             kotlinx.coroutines.delay(KEY_SAVE_DEBOUNCE_MS)
             val target = store
             if (target == null) {
-                if (isCurrentSession(generation)) {
+                runIfCurrentSession(generation) {
                     _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
                     _keySaving.value = false
                 }
@@ -318,24 +318,26 @@ object AiSession {
                 GeminiStore.OperationResult.Success -> {
                     val loaded = target.settings.first()
                     if (!isCurrentSession(generation)) return@launch
-                    when (loaded) {
-                        is GeminiStore.SettingsResult.Available -> {
-                            _settings.value = loaded.settings
-                            _storageError.value = null
-                            if (trimmed.isBlank()) clearAiSessionData()
-                        }
-                        is GeminiStore.SettingsResult.Failed -> {
-                            _settings.update { it.copy(apiKey = "") }
-                            _storageError.value = loaded.error
+                    runIfCurrentSession(generation) {
+                        when (loaded) {
+                            is GeminiStore.SettingsResult.Available -> {
+                                _settings.value = loaded.settings
+                                _storageError.value = null
+                                if (trimmed.isBlank()) clearAiSessionData()
+                            }
+                            is GeminiStore.SettingsResult.Failed -> {
+                                _settings.update { it.copy(apiKey = "") }
+                                _storageError.value = loaded.error
+                            }
                         }
                     }
                 }
-                is GeminiStore.OperationResult.Failed -> {
+                is GeminiStore.OperationResult.Failed -> runIfCurrentSession(generation) {
                     _settings.update { it.copy(apiKey = "") }
                     _storageError.value = result.error
                 }
             }
-            if (isCurrentSession(generation)) _keySaving.value = false
+            runIfCurrentSession(generation) { _keySaving.value = false }
         }
     }
 
@@ -346,10 +348,12 @@ object AiSession {
                 if (isCurrentSession(generation)) store?.saveModel(id, byUser = true) else null
             }
             if (!isCurrentSession(generation)) return@launch
-            when (result) {
-                GeminiStore.OperationResult.Success -> _storageError.value = null
-                is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
-                null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+            runIfCurrentSession(generation) {
+                when (result) {
+                    GeminiStore.OperationResult.Success -> _storageError.value = null
+                    is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
+                    null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                }
             }
         }
     }
@@ -391,7 +395,7 @@ object AiSession {
             }
             if (!isCurrentSession(generation)) return@launch
             when (result) {
-                GeminiStore.OperationResult.Success -> {
+                GeminiStore.OperationResult.Success -> runIfCurrentSession(generation) {
                     _settings.update {
                         it.copy(apiKey = "", model = "", discoveredModels = emptyList(), modelUserPicked = false)
                     }
@@ -400,19 +404,21 @@ object AiSession {
                     _forgetResult.value = ForgetResult.SUCCESS
                 }
                 is GeminiStore.OperationResult.Failed -> {
-                    _storageError.value = result.error
+                    runIfCurrentSession(generation) { _storageError.value = result.error }
                     // If the vault still has a readable key, restore it; otherwise stay fail-closed.
                     val loaded = target?.settings?.first()
                     if (!isCurrentSession(generation)) return@launch
-                    when (loaded) {
-                        is GeminiStore.SettingsResult.Available -> _settings.value = loaded.settings
-                        is GeminiStore.SettingsResult.Failed -> _storageError.value = loaded.error
-                        null -> Unit
+                    runIfCurrentSession(generation) {
+                        when (loaded) {
+                            is GeminiStore.SettingsResult.Available -> _settings.value = loaded.settings
+                            is GeminiStore.SettingsResult.Failed -> _storageError.value = loaded.error
+                            null -> Unit
+                        }
+                        _forgetResult.value = ForgetResult.FAILURE
                     }
-                    _forgetResult.value = ForgetResult.FAILURE
                 }
             }
-            if (isCurrentSession(generation)) _keySaving.value = false
+            runIfCurrentSession(generation) { _keySaving.value = false }
         }
     }
 
