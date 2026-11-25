@@ -178,7 +178,15 @@ object ShareBridge {
     }
 
     /** Accepted client ownership is tied to the listener session and closed on teardown. */
-    private data class ActiveClient(val socket: Socket, val via: LanTarget?)
+    private class ActiveClient(val socket: Socket, val via: LanTarget?) {
+        /** Guarded by ShareBridge's monitor; includes every upstream TCP leg. */
+        val upstreams = linkedSetOf<Socket>()
+
+        fun close() {
+            upstreams.toList().forEach { runCatching { it.close() } }
+            runCatching { socket.close() }
+        }
+    }
 
     private val _active = MutableStateFlow(false)
 
@@ -248,7 +256,7 @@ object ShareBridge {
     /** r6: one listener pair PER share interface. Guarded by the object lock. */
     private val lanListeners = ShareListenerRegistry<LanListener> { it.close() }
     /** Guarded by this object's monitor; includes clients currently inside handlers. */
-    private val activeClients = ShareListenerRegistry<ActiveClient> { runCatching { it.socket.close() } }
+    private val activeClients = ShareListenerRegistry<ActiveClient> { it.close() }
 
     /** Immutable snapshot of the bound share interfaces, for lock-free admission. */
     @Volatile
@@ -982,7 +990,7 @@ object ShareBridge {
                     return
                 }
                 client.soTimeout = 0
-                val upstream = dialUpstreamGreeted() ?: run {
+                val upstream = dialUpstreamGreeted(client) ?: run {
                     out.write(socksReply(SOCKS_REP_GENERAL_FAILURE))
                     out.flush()
                     return
@@ -1103,7 +1111,7 @@ object ShareBridge {
      */
     private fun serveUdpAssociate(client: Socket, request: SocksRequest) {
         val out = client.getOutputStream()
-        val upstream = dialUpstreamGreeted() ?: run {
+        val upstream = dialUpstreamGreeted(client) ?: run {
             out.write(socksReply(SOCKS_REP_GENERAL_FAILURE))
             out.flush()
             return
@@ -1249,6 +1257,10 @@ object ShareBridge {
     /** Loopback client: byte-for-byte relay into the upstream SOCKS5 (unchanged). */
     private fun relayToLocalSocks(client: Socket) {
         val upstream = Socket()
+        if (!registerUpstream(client, upstream)) {
+            runCatching { upstream.close() }
+            return
+        }
         try {
             upstream.tcpNoDelay = true
             upstream.connect(InetSocketAddress(TunnelConfig.SOCKS_HOST, upstreamPort), DIAL_TIMEOUT_MS)
@@ -1259,13 +1271,29 @@ object ShareBridge {
     }
 
     /**
+     * Register an upstream socket before connect/handshake. If teardown already
+     * removed the client, reject and close the new socket instead of letting a
+     * stale handler create an unowned tunnel leg.
+     */
+    private fun registerUpstream(client: Socket, upstream: Socket): Boolean = synchronized(this) {
+        val owner = activeClients.snapshot().firstOrNull { it.socket === client } ?: return@synchronized false
+        if (client.isClosed) return@synchronized false
+        owner.upstreams.add(upstream)
+        true
+    }
+
+    /**
      * Opens a connection to the upstream SOCKS5 and completes its no-auth
      * greeting. The upstream is ALWAYS a loopback address - asserted, because
      * "the bridge never dials the internet itself" is the zero-leak invariant.
      */
-    private fun dialUpstreamGreeted(): Socket? {
+    private fun dialUpstreamGreeted(client: Socket): Socket? {
         val host = TunnelConfig.SOCKS_HOST
         val socket = Socket()
+        if (!registerUpstream(client, socket)) {
+            runCatching { socket.close() }
+            return null
+        }
         return try {
             val address = InetAddress.getByName(host)
             check(address.isLoopbackAddress) { "upstream must be loopback" }
@@ -1368,7 +1396,7 @@ object ShareBridge {
                 out.writeAscii("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 return
             }
-            val upstream = socksOpen(host, port) ?: run {
+            val upstream = socksOpen(client, host, port) ?: run {
                 out.writeAscii("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 return
             }
@@ -1402,7 +1430,7 @@ object ShareBridge {
             out.writeAscii("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             return
         }
-        val upstream = socksOpen(host, port) ?: run {
+        val upstream = socksOpen(client, host, port) ?: run {
             out.writeAscii("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
             return
         }
@@ -1574,8 +1602,8 @@ object ShareBridge {
     }
 
     /** Opens a TCP stream to host:port THROUGH the upstream SOCKS5 (name -> tunnel DNS). */
-    private fun socksOpen(host: String, port: Int): Socket? {
-        val socket = dialUpstreamGreeted() ?: return null
+    private fun socksOpen(client: Socket, host: String, port: Int): Socket? {
+        val socket = dialUpstreamGreeted(client) ?: return null
         return try {
             socket.soTimeout = 30_000
             val out = socket.getOutputStream()
