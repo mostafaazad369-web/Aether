@@ -530,7 +530,7 @@ fun <T> SettingsChoiceRow(
     sheetTitle: String = title,
     /**
      * 1.4.0-r5: optional second line under an option in the sheet (e.g. what a
-     * Gemini model trades). Null / blank = single-line card, exactly as before,
+     * option trade-offs). Null / blank = single-line card, exactly as before,
      * so every existing caller renders unchanged.
      */
     optionDescription: (@Composable (T) -> String?)? = null,
