@@ -125,15 +125,6 @@ enum class SettingsRoute {
     ENGINE,
     APPEARANCE,
 
-    /**
-     * 1.2.9 AI: the assistant's own settings (key, model, behaviour), the chat, and
-     * the log/DPI advisor.
-     *
-     * Three routes rather than one screen with tabs, for the reason the whole
-     * settings area is built this way: only the open page is composed, so the chat
-     * - which owns a text field, an animated indicator and an auto-scrolling list -
-     * costs nothing at all while the user is reading about their API key.
-     */
     DIAGNOSTICS,
     SHARE,
     ABOUT,
@@ -165,9 +156,6 @@ fun SettingsHost(
     // QUICK is a ROOT, not a page under HOME: back from the shortcut page has to
     // leave settings, not descend into the full tree the shortcut exists to avoid.
     //
-    // 1.2.9: AI_CHAT is a root for exactly the same reason. It is opened straight
-    // from the home screen's AI button, and backing out of a chat into the settings
-    // list would be the same bug in a new place.
     val stack = remember {
         val root = when (start) {
             SettingsRoute.QUICK -> SettingsRoute.QUICK
