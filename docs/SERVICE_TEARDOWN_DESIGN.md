@@ -366,3 +366,26 @@ The Xray change closes premature handle/config deletion and prevents replacement
 - Add service-level tests for destruction racing with Xray startup and watcher restart.
 - Measure worst-case `onDestroy()` latency with injected slow/failing process termination and native cleanup.
 - Keep Android device/process-survival verification separate from JVM policy tests.
+## Follow-up audit — asynchronous shared-bridge commands (2026-11-25)
+
+### Confirmed ShareBridge start/stop ordering gap
+
+`ShareBridge.start()` launches a daemon `share-start` thread and returns immediately. The thread calls `startSync()`, which increments the bridge's internal `session` only when it eventually enters its synchronized body. `ShareBridge.stop()` changes the visible active/request flags, increments `session`, launches a separate daemon `share-stop` thread, and returns immediately. The stop thread closes listeners only if its captured session still matches.
+
+This leaves a stale-start ordering case: `start()` can enqueue its thread; `stop()` can then increment the session and enqueue cleanup; if the start thread enters `startSync()` after that stop request, `startSync()` increments the session again and starts listeners. The stop thread sees a different session and deliberately skips closing them. The older start request can therefore resurrect sharing after a later stop request. The internal watcher/session token protects stale watchers, but it does not order the asynchronous public start request against stop.
+
+`AetherVpnService` calls the asynchronous `ShareBridge.start()` in multiple connect paths and calls `ShareBridge.stop()` during cleanup. Thus this is relevant to disconnect, reconnect, service destruction, and lockdown teardown. It is independent of the service-local `nativeLifecycleLock`, because ShareBridge's worker threads and singleton state are not governed by that lock.
+
+### Other ownership observations
+
+- `AetherVpnService` registers Smart Plus probe engines in `raceEngines` before `engine.start()`, which is the correct local register-before-start order. However, the registry is an instance field; a failed reap retained there is lost if the Service instance becomes unreachable.
+- The main Aether engine is assigned to `engine` before `start()`, and Xray is assigned to `xray` before its start path. Those are also locally registered before start, but remain Service-instance-owned.
+- The userspace `SocksTunBridge` is assigned to `tunBridge` before `bridge.start()` under `nativeLifecycleLock`; HEV sets `tunnelStarted = true` before entering JNI. These are useful local patterns to preserve in a future process-level registry.
+- `HevTunnel.stop()` is asynchronous. Cleanup requests stop and closes the Service-owned TUN descriptor; HEV's duplicated descriptor remains owned by the native worker until its exit. The next connect waits for `awaitStopped()`, but Service destruction has no process-level completion owner.
+- `TorSocksFront.start()` is synchronous for listener creation; `stop()` closes the listener and calls `shutdownNow()` on its pool but does not await worker termination. `PsiphonTransport.stop()` delegates to `PsiphonSocksFront.stop()` and clears a global callback. These singleton fronts need explicit stop-completion semantics in the ownership design.
+
+### Recommended next change
+
+Fix ShareBridge command ordering before introducing a broad resource registry. Give every public start/stop command a monotonically increasing command generation reserved synchronously at API entry. A queued start must verify that its generation is still current before opening listeners; a queued stop must close only the generation it owns and must not close a newer start. Preserve synchronous `startSync()` semantics by making it participate in the same command-generation protocol. Add deterministic JVM tests for start-then-stop-before-start-worker-runs, stop-then-new-start, and stale stop completion after a newer start. Do not change the UI's asynchronous API or LAN exposure defaults.
+
+Do not claim the ShareBridge race is fixed until those tests and the actual implementation are committed.
