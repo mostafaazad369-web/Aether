@@ -315,8 +315,9 @@ object AiSession {
             if (!isCurrentSession(generation)) return@launch
             when (result) {
                 GeminiStore.OperationResult.Success -> {
-                    when (val loaded = target.settings.first()) {
-                        if (!isCurrentSession(generation)) return@launch
+                    val loaded = target.settings.first()
+                    if (!isCurrentSession(generation)) return@launch
+                    when (loaded) {
                         is GeminiStore.SettingsResult.Available -> {
                             _settings.value = loaded.settings
                             _storageError.value = null
@@ -395,8 +396,9 @@ object AiSession {
                 is GeminiStore.OperationResult.Failed -> {
                     _storageError.value = result.error
                     // If the vault still has a readable key, restore it; otherwise stay fail-closed.
-                    when (val loaded = target?.settings?.first()) {
-                        if (!isCurrentSession(generation)) return@launch
+                    val loaded = target?.settings?.first()
+                    if (!isCurrentSession(generation)) return@launch
+                    when (loaded) {
                         is GeminiStore.SettingsResult.Available -> _settings.value = loaded.settings
                         is GeminiStore.SettingsResult.Failed -> _storageError.value = loaded.error
                         null -> Unit
