@@ -391,14 +391,19 @@ object ShareBridge {
         // Reserve synchronously: a start worker that has not entered its
         // critical section yet becomes stale immediately, not when stop's
         // background cleanup thread eventually runs.
-        commandGeneration.reserve()
-        _active.value = false
-        lanRequested = false
-        _lanStatus.value = LanStatus.OFF
-        val stopSession = synchronized(this) { ++session }
+        val generation = commandGeneration.reserve()
+        val stopSession = synchronized(this) {
+            // A newer start may have superseded this stop while it waited for
+            // the monitor. In that case this stop must not mutate the new run.
+            if (!commandGeneration.isCurrent(generation)) return
+            _active.value = false
+            lanRequested = false
+            _lanStatus.value = LanStatus.OFF
+            ++session
+        }
         thread(name = "share-stop", isDaemon = true) {
             synchronized(this) {
-                if (session == stopSession) {
+                if (commandGeneration.isCurrent(generation) && session == stopSession) {
                     val had = loSocks != null || lanListeners.isNotEmpty()
                     closeAllLocked()
                     if (had) DiagnosticsLog.i(TAG, "Sharing OFF")
