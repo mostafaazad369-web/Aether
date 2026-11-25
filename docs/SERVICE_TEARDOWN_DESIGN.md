@@ -326,3 +326,23 @@ Additional concrete findings:
 ### Implementation boundary
 
 No runtime code was changed in this audit update. Do not treat publishing a handle before `start()`, or adding a standalone mutex, as a complete fix: a stop can still happen before the start call enters the resource itself. The next implementation slice must make resource acquisition cancellable/registrable before side effects, pair each engine's identity lease exactly once, and test failure before spawn, stop during spawn, and concurrent Smart Plus lanes. Keep the broader process-death and Android Service destruction limitations explicit.
+## Follow-up audit — Xray child-process ownership (2026-11-25)
+
+The Xray teardown path had the same class of failure previously corrected for the Aether engine, with an additional credential-file hazard:
+
+- `XrayProcess.stop()` previously nulled its `Process` reference before confirming exit, sent `destroyForcibly()` without waiting for confirmation, and deleted the config file unconditionally. A still-running Xray child could therefore become untracked while its credential-bearing config was deleted underneath it.
+- `XrayProcess.start()` previously ignored the result of its implicit stop and could proceed to spawn a replacement even if the previous child had not exited.
+- `AetherVpnService.stopCustom()` previously discarded the Xray handle regardless of whether stop had succeeded.
+
+### Change made on the feature branch
+
+- `XrayProcess.stop()` now delegates to the shared bounded `ProcessReaper.terminateAndReap()` policy and returns a Boolean confirmation.
+- If exit cannot be confirmed, it retains both the process reference and config-file reference, and does not delete the config.
+- A subsequent `start()` refuses to spawn a replacement unless the previous process has been confirmed reaped.
+- `AetherVpnService.startXray()` enforces the same gate before a new Xray generation starts.
+- `stopCustom()` clears the Xray handle and custom-session metadata only after confirmed stop; otherwise it retains ownership for a later teardown retry.
+- Existing `ProcessReaperTest` covers graceful exit, forced exit confirmation, failed confirmation, and interrupt restoration. These are policy tests; no Xray process integration or Android Service lifecycle test has been run for this change.
+
+### Remaining boundary
+
+The Xray handle is still stored in the Service instance. If `onDestroy()` returns after an unconfirmed stop and the app process remains alive while the Service instance is discarded, this handle can still be lost. A process-level resource owner remains necessary for that broader case. This change narrows the loss window and prevents premature deletion/replacement, but does not claim to solve Service-destruction ownership or child-process survival after app-process death.
