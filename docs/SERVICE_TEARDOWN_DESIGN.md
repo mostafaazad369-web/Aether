@@ -440,3 +440,11 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Removed the per-start reset of active connection counters. Closing/replacing listeners does not synchronously terminate already accepted handlers, so resetting their process-wide count could let old handlers decrement a freshly reset counter and make accounting inaccurate. Active handlers continue to occupy capacity until their existing finally path releases it.
 - Added JVM coverage for simultaneous admissions racing at the configured limit and for ordinary capacity exhaustion.
 - This is a focused capacity/accounting correction. It does not yet own or forcibly close active client/upstream sockets on stop, nor does it establish accept-vs-stop atomic handoff. Those remain open; build, tests and Android device behavior are not verified.
+
+
+### ShareBridge accepted-client ownership and teardown (2026-11-25)
+
+- Each accept loop now captures the listener session. After accept, it checks the captured session, listener state and LAN intent under the same ShareBridge monitor used by stop/teardown; admission and registration in the active-client registry occur in that critical section. A stop that wins first causes the accepted socket to be rejected; a registration that wins first is visible to teardown.
+- Accepted client sockets are registered before handler-thread handoff. Full bridge teardown closes all registered clients; LAN-only teardown closes LAN clients while preserving loopback clients. When a LAN interface disappears during watcher reconciliation, clients associated with that interface are also closed.
+- Handler completion removes its socket from the registry and releases the existing connection counters. Socket close is expected to unblock TCP reads/relay; UDP association cleanup follows its existing control-socket termination path.
+- Added a registry policy test for LAN-only removal while loopback ownership remains. This does not constitute a real ServerSocket accept/stop stress test, Android integration test, or proof that every relay worker has terminated. Upstream TCP sockets are still closed by their handler finally paths after client-side unblocking; there is no separate process-wide upstream-socket registry yet. Build, tests and device behavior remain unverified.
