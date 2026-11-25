@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.data.AiSettings
@@ -132,6 +134,8 @@ object AiSession {
     /** Invalidates every result produced under a previous credential/session. */
     private val sessionGeneration = AiSessionGeneration()
     private val sessionLock = Any()
+    /** Serializes the two credential mutations across overlapping UI actions. */
+    private val keyMutationMutex = Mutex()
 
     private fun isCurrentSession(generation: Long): Boolean =
         sessionGeneration.isCurrent(generation)
@@ -291,6 +295,7 @@ object AiSession {
         val trimmed = key.trim()
         keySaveJob?.cancel()
         invalidateAiSession()
+        val generation = sessionGeneration.current()
         _forgetResult.value = null
         _storageError.value = null
         // A draft is not a credential: disable all requests until the write commits.
@@ -300,13 +305,18 @@ object AiSession {
             kotlinx.coroutines.delay(KEY_SAVE_DEBOUNCE_MS)
             val target = store
             if (target == null) {
-                _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
-                _keySaving.value = false
+                if (isCurrentSession(generation)) {
+                    _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+                    _keySaving.value = false
+                }
                 return@launch
             }
-            when (val result = target.saveKey(trimmed)) {
+            val result = keyMutationMutex.withLock { target.saveKey(trimmed) }
+            if (!isCurrentSession(generation)) return@launch
+            when (result) {
                 GeminiStore.OperationResult.Success -> {
                     when (val loaded = target.settings.first()) {
+                        if (!isCurrentSession(generation)) return@launch
                         is GeminiStore.SettingsResult.Available -> {
                             _settings.value = loaded.settings
                             _storageError.value = null
@@ -323,7 +333,7 @@ object AiSession {
                     _storageError.value = result.error
                 }
             }
-            _keySaving.value = false
+            if (isCurrentSession(generation)) _keySaving.value = false
         }
     }
 
@@ -360,6 +370,7 @@ object AiSession {
     fun forget() {
         keySaveJob?.cancel()
         invalidateAiSession()
+        val generation = sessionGeneration.current()
         _keySaving.value = true
         _forgetResult.value = null
         _storageError.value = null
@@ -367,8 +378,11 @@ object AiSession {
         _settings.update { it.copy(apiKey = "") }
         scope.launch {
             val target = store
-            val result = target?.forget()
-                ?: GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE)
+            val result = keyMutationMutex.withLock {
+                target?.forget()
+                    ?: GeminiStore.OperationResult.Failed(GeminiStore.StorageError.STORAGE_FAILURE)
+            }
+            if (!isCurrentSession(generation)) return@launch
             when (result) {
                 GeminiStore.OperationResult.Success -> {
                     _settings.update {
@@ -382,6 +396,7 @@ object AiSession {
                     _storageError.value = result.error
                     // If the vault still has a readable key, restore it; otherwise stay fail-closed.
                     when (val loaded = target?.settings?.first()) {
+                        if (!isCurrentSession(generation)) return@launch
                         is GeminiStore.SettingsResult.Available -> _settings.value = loaded.settings
                         is GeminiStore.SettingsResult.Failed -> _storageError.value = loaded.error
                         null -> Unit
@@ -389,7 +404,7 @@ object AiSession {
                     _forgetResult.value = ForgetResult.FAILURE
                 }
             }
-            _keySaving.value = false
+            if (isCurrentSession(generation)) _keySaving.value = false
         }
     }
 
@@ -431,6 +446,7 @@ object AiSession {
      */
     fun discoverModels(profile: ConnectionProfile, state: ConnectionState) {
         if (_discovering.value) return
+        val generation = sessionGeneration.current()
         val current = _settings.value
         val gate = gate(state, profile)
         if (!current.hasKey) {
@@ -443,7 +459,6 @@ object AiSession {
         }
         _discovering.value = true
         _probe.value = AiProbe.Running
-        val generation = sessionGeneration.current()
         discoveryJob = scope.launch {
             try {
                 val port = AiAvailability.socksPort(profile.backend, state)
@@ -591,6 +606,7 @@ object AiSession {
         state: ConnectionState,
         persian: Boolean,
     ) {
+        val generation = sessionGeneration.current()
         val current = _settings.value
         val gate = gate(state, profile)
         if (!gate.ready) {
@@ -607,9 +623,9 @@ object AiSession {
             return
         }
 
+        if (!isCurrentSession(generation)) return
         _thinking.value = true
         chatJob?.cancel()
-        val generation = sessionGeneration.current()
         chatJob = scope.launch {
             try {
                 if (!isCurrentSession(generation)) return@launch
@@ -890,7 +906,9 @@ object AiSession {
         auto: Boolean,
         onApply: (ConnectionProfile) -> Unit = {},
     ) {
+        val generation = sessionGeneration.current()
         val current = _settings.value
+        if (!isCurrentSession(generation)) return
         if (auto && !current.autoOptimize) return
         if (auto) {
             val now = System.currentTimeMillis()
@@ -906,7 +924,6 @@ object AiSession {
 
         _advice.value = AiAdviceState.Running
         adviceJob?.cancel()
-        val generation = sessionGeneration.current()
         adviceJob = scope.launch {
             try {
                 if (!isCurrentSession(generation)) return@launch
