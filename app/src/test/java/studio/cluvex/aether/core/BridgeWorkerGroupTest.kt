@@ -58,6 +58,29 @@ class BridgeWorkerGroupTest {
     }
 
     @Test
+    fun workerCanRequestItsOwnStopWithoutJoiningItself() {
+        val group = BridgeWorkerGroup(joinTimeoutMs = 100)
+        val stopReturned = CountDownLatch(1)
+        val stopResult = java.util.concurrent.atomic.AtomicBoolean(true)
+        val worker = Thread {
+            stopResult.set(group.stop())
+            stopReturned.countDown()
+        }
+
+        group.start(listOf(worker))
+
+        assertTrue(stopReturned.await(1, TimeUnit.SECONDS))
+        assertFalse("the current worker is still alive while stop() returns", stopResult.get())
+        worker.join(1_000)
+        assertFalse(worker.isAlive)
+
+        val replacement = Thread {}
+        group.start(listOf(replacement))
+        replacement.join(1_000)
+        assertFalse(replacement.isAlive)
+    }
+
+    @Test
     fun refusesRestartWhileAnOldWorkerIsStillBlocked() {
         val group = BridgeWorkerGroup(joinTimeoutMs = 10)
         val release = CountDownLatch(1)
