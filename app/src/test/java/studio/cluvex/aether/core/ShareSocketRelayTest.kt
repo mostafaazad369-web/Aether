@@ -10,38 +10,45 @@ import org.junit.Test
 class ShareSocketRelayTest {
     @Test
     fun sourceHalfCloseDoesNotDisableReverseDirection() {
-        ServerSocket(0).use { server ->
-            val source = Socket("127.0.0.1", server.localPort)
-            val destination = server.accept()
-            try {
-                val transferred = AtomicLong(0L)
-                val worker = Thread {
-                    ShareSocketRelay.pipe(source, destination, transferred)
+        ServerSocket(0).use { clientListener ->
+            ServerSocket(0).use { upstreamListener ->
+                val clientPeer = Socket("127.0.0.1", clientListener.localPort)
+                val bridgeClient = clientListener.accept()
+                val upstreamPeer = Socket("127.0.0.1", upstreamListener.localPort)
+                val bridgeUpstream = upstreamListener.accept()
+                try {
+                    val uploaded = AtomicLong(0L)
+                    val downloaded = AtomicLong(0L)
+                    val forward = Thread {
+                        ShareSocketRelay.pipe(bridgeClient, bridgeUpstream, uploaded)
+                    }
+                    val reverse = Thread {
+                        ShareSocketRelay.pipe(bridgeUpstream, bridgeClient, downloaded)
+                    }
+                    forward.start()
+                    reverse.start()
+
+                    clientPeer.getOutputStream().write("request".toByteArray())
+                    clientPeer.shutdownOutput()
+
+                    assertEquals("request", String(upstreamPeer.getInputStream().readBytes()))
+                    upstreamPeer.getOutputStream().write("response".toByteArray())
+                    upstreamPeer.getOutputStream().flush()
+                    upstreamPeer.shutdownOutput()
+
+                    assertEquals("response", String(clientPeer.getInputStream().readBytes()))
+                    forward.join(1_000)
+                    reverse.join(1_000)
+                    assertTrue("forward relay worker should finish", !forward.isAlive)
+                    assertTrue("reverse relay worker should finish", !reverse.isAlive)
+                    assertEquals(7L, uploaded.get())
+                    assertEquals(8L, downloaded.get())
+                } finally {
+                    clientPeer.close()
+                    bridgeClient.close()
+                    upstreamPeer.close()
+                    bridgeUpstream.close()
                 }
-                worker.start()
-
-                source.getOutputStream().write("request".toByteArray())
-                source.shutdownOutput()
-
-                val received = destination.getInputStream().readBytes()
-                assertEquals("request", String(received))
-                destination.getOutputStream().write("response".toByteArray())
-                destination.getOutputStream().flush()
-
-                val response = ByteArray(8)
-                var offset = 0
-                while (offset < response.size) {
-                    val count = source.getInputStream().read(response, offset, response.size - offset)
-                    assertTrue("reverse stream ended prematurely", count >= 0)
-                    offset += count
-                }
-                assertEquals("response", String(response))
-                worker.join(1_000)
-                assertTrue("forward relay worker should finish after source EOF", !worker.isAlive)
-                assertEquals(7L, transferred.get())
-            } finally {
-                source.close()
-                destination.close()
             }
         }
     }
