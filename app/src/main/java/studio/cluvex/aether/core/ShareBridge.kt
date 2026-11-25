@@ -281,6 +281,13 @@ object ShareBridge {
     private var session = 0
     private var watcherSession = -1
 
+    /**
+     * Orders public start/stop requests at API-entry time, before their worker
+     * threads are scheduled. A queued start from an older generation must not
+     * resurrect listeners after a newer stop request.
+     */
+    private val commandGeneration = ShareCommandGeneration()
+
     /** Loopback SOCKS5 port every shared connection is relayed INTO. */
     @Volatile
     private var upstreamPort = PortLease.socks
@@ -294,7 +301,10 @@ object ShareBridge {
      * exposure has to be asked for.
      */
     fun start(localOnly: Boolean = true, upstreamPort: Int? = null) {
-        thread(name = "share-start", isDaemon = true) { startSync(localOnly, upstreamPort) }
+        val generation = commandGeneration.reserve()
+        thread(name = "share-start", isDaemon = true) {
+            startSyncForGeneration(localOnly, upstreamPort, generation)
+        }
     }
 
     /**
@@ -305,7 +315,21 @@ object ShareBridge {
      * @param upstreamPort loopback SOCKS5 port to relay into; null keeps what the
      *   running session configured (the UI toggle must never retarget a chain).
      */
-    fun startSync(localOnly: Boolean = true, upstreamPort: Int? = null): Boolean = synchronized(this) {
+    fun startSync(localOnly: Boolean = true, upstreamPort: Int? = null): Boolean {
+        val generation = commandGeneration.reserve()
+        return startSyncForGeneration(localOnly, upstreamPort, generation)
+    }
+
+    /**
+     * Executes only if no newer public start/stop request has superseded this
+     * command while it was waiting for its worker thread or the object monitor.
+     */
+    private fun startSyncForGeneration(
+        localOnly: Boolean,
+        upstreamPort: Int?,
+        generation: Long,
+    ): Boolean = synchronized(this) {
+        if (!commandGeneration.isCurrent(generation)) return@synchronized false
         if (upstreamPort != null) this.upstreamPort = upstreamPort
         lanRequested = !localOnly
 
@@ -364,6 +388,10 @@ object ShareBridge {
 
     /** Turn everything off. Safe from any thread. */
     fun stop() {
+        // Reserve synchronously: a start worker that has not entered its
+        // critical section yet becomes stale immediately, not when stop's
+        // background cleanup thread eventually runs.
+        commandGeneration.reserve()
         _active.value = false
         lanRequested = false
         _lanStatus.value = LanStatus.OFF
@@ -1584,4 +1612,15 @@ object ShareBridge {
 
     /** Default username; the real one comes from [setCredentials]. */
     const val DEFAULT_USER = "aether"
+}
+/**
+ * Small JVM-testable ordering primitive for asynchronous bridge commands.
+ * Generation reservation is deliberately synchronous at API entry.
+ */
+internal class ShareCommandGeneration {
+    private val current = AtomicLong(0L)
+
+    fun reserve(): Long = current.incrementAndGet()
+
+    fun isCurrent(generation: Long): Boolean = current.get() == generation
 }
