@@ -1700,22 +1700,7 @@ object ShareBridge {
     }
 
     private fun pipe(from: Socket, to: Socket, counter: AtomicLong) {
-        val buffer = ByteArray(16 * 1024)
-        try {
-            val input = from.getInputStream()
-            val output = to.getOutputStream()
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                output.write(buffer, 0, n)
-                output.flush()
-                counter.addAndGet(n.toLong())
-            }
-        } catch (_: Exception) {
-        } finally {
-            runCatching { to.shutdownOutput() }
-            runCatching { from.shutdownInput() }
-        }
+        ShareSocketRelay.pipe(from, to, counter)
     }
 
     private fun InputStream.readExact(n: Int): ByteArray? {
