@@ -293,16 +293,24 @@ object AiSession {
         }
     }
 
+    private fun recordPreferenceSave(result: GeminiStore.OperationResult?) {
+        when (result) {
+            GeminiStore.OperationResult.Success -> _storageError.value = null
+            is GeminiStore.OperationResult.Failed -> _storageError.value = result.error
+            null -> _storageError.value = GeminiStore.StorageError.STORAGE_FAILURE
+        }
+    }
+
     fun setAutoOptimize(enabled: Boolean) {
-        scope.launch { store?.saveAutoOptimize(enabled) }
+        scope.launch { recordPreferenceSave(store?.saveAutoOptimize(enabled)) }
     }
 
     fun setAutoApply(enabled: Boolean) {
-        scope.launch { store?.saveAutoApply(enabled) }
+        scope.launch { recordPreferenceSave(store?.saveAutoApply(enabled)) }
     }
 
     fun setShowHints(enabled: Boolean) {
-        scope.launch { store?.saveShowHints(enabled) }
+        scope.launch { recordPreferenceSave(store?.saveShowHints(enabled)) }
     }
 
     fun forget() {
