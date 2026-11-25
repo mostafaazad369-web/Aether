@@ -177,6 +177,9 @@ object ShareBridge {
         }
     }
 
+    /** Accepted client ownership is tied to the listener session and closed on teardown. */
+    private data class ActiveClient(val socket: Socket, val lan: Boolean)
+
     private val _active = MutableStateFlow(false)
 
     /** True while the loopback listeners (the bridge itself) are running. */
@@ -244,6 +247,8 @@ object ShareBridge {
     private var loHttp: ServerSocket? = null
     /** r6: one listener pair PER share interface. Guarded by the object lock. */
     private val lanListeners = ShareListenerRegistry<LanListener> { it.close() }
+    /** Guarded by this object's monitor; includes clients currently inside handlers. */
+    private val activeClients = ShareListenerRegistry<ActiveClient> { runCatching { it.socket.close() } }
 
     /** Immutable snapshot of the bound share interfaces, for lock-free admission. */
     @Volatile
@@ -382,8 +387,8 @@ object ShareBridge {
         }
         _socksPort.value = loSocks?.localPort
         _httpPort.value = loHttp?.localPort
-        loSocks?.let { acceptLoop("share-socks-lo", it, via = null) { c -> serveSocksClient(c) } }
-        loHttp?.let { acceptLoop("share-http-lo", it, via = null) { c -> serveHttpClient(c) } }
+        loSocks?.let { acceptLoop("share-socks-lo", it, via = null, listenerSession = session) { c -> serveSocksClient(c) } }
+        loHttp?.let { acceptLoop("share-http-lo", it, via = null, listenerSession = session) { c -> serveHttpClient(c) } }
         _active.value = true
         DiagnosticsLog.i(TAG, "Proxy bridge ON - SOCKS5 :$SOCKS_SHARE_PORT + HTTP :$HTTP_SHARE_PORT (loopback)")
 
@@ -611,8 +616,8 @@ object ShareBridge {
                 continue
             }
             lanListeners.add(LanListener(target, socks, http))
-            acceptLoop("share-socks-lan", socks, via = target) { c -> serveSocksClient(c) }
-            acceptLoop("share-http-lan", http, via = target) { c -> serveHttpClient(c) }
+            acceptLoop("share-socks-lan", socks, via = target, listenerSession = session) { c -> serveSocksClient(c) }
+            acceptLoop("share-http-lan", http, via = target, listenerSession = session) { c -> serveHttpClient(c) }
             changed = true
         }
 
@@ -814,6 +819,7 @@ object ShareBridge {
 
     private fun closeLanLocked() {
         lanListeners.closeAll()
+        activeClients.retain { !it.lan }
         lanTargets = emptyList()
         _lanEndpoint.value = null
         _lanEndpoints.value = emptyList()
@@ -821,6 +827,7 @@ object ShareBridge {
 
     private fun closeAllLocked() {
         closeLanLocked()
+        activeClients.closeAll()
         runCatching { loSocks?.close() }
         loSocks = null
         runCatching { loHttp?.close() }
@@ -832,7 +839,13 @@ object ShareBridge {
     // ============================================================ admission
 
     /** [via] is the share interface a LAN listener is bound on; null = loopback. */
-    private fun acceptLoop(name: String, server: ServerSocket, via: LanTarget?, handler: (Socket) -> Unit) {
+    private fun acceptLoop(
+        name: String,
+        server: ServerSocket,
+        via: LanTarget?,
+        listenerSession: Long,
+        handler: (Socket) -> Unit,
+    ) {
         thread(name = name, isDaemon = true) {
             while (!server.isClosed) {
                 val client = try {
@@ -840,10 +853,27 @@ object ShareBridge {
                 } catch (_: Exception) {
                     break
                 }
-                if (!admit(client, via)) {
+
+                // Registration and the stop/session check share the bridge monitor.
+                // Thus stop either sees and closes this accepted socket, or wins first
+                // and makes this accept-loop generation reject it before handoff.
+                val registered = synchronized(this) {
+                    if (session != listenerSession || server.isClosed || !_active.value ||
+                        (via != null && !lanRequested)
+                    ) {
+                        false
+                    } else if (!admit(client, via)) {
+                        false
+                    } else {
+                        activeClients.add(ActiveClient(client, lan = via != null))
+                        true
+                    }
+                }
+                if (!registered) {
                     runCatching { client.close() }
                     continue
                 }
+
                 thread(name = "$name-conn", isDaemon = true) {
                     try {
                         client.tcpNoDelay = true
@@ -851,6 +881,9 @@ object ShareBridge {
                     } catch (_: Exception) {
                         // Per-connection errors are non-fatal by design.
                     } finally {
+                        synchronized(this) {
+                            activeClients.retain { it.socket !== client }
+                        }
                         liveConnections.decrementAndGet()
                         if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
                         runCatching { client.close() }
