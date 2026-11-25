@@ -178,7 +178,7 @@ object ShareBridge {
     }
 
     /** Accepted client ownership is tied to the listener session and closed on teardown. */
-    private data class ActiveClient(val socket: Socket, val lan: Boolean)
+    private data class ActiveClient(val socket: Socket, val via: LanTarget?)
 
     private val _active = MutableStateFlow(false)
 
@@ -598,6 +598,9 @@ object ShareBridge {
             targets.any { it.address == listener.target.address } &&
                 !listener.socks.isClosed && !listener.http.isClosed
         }
+        activeClients.retain { client ->
+            client.via == null || targets.any { it.address == client.via.address }
+        }
         if (lanListeners.snapshot().size != previousListenerCount) changed = true
         if (_authRequired.value && _proxyPassword.value.isBlank()) {
             _proxyPassword.value = LanGuard.randomPassword()
@@ -819,7 +822,7 @@ object ShareBridge {
 
     private fun closeLanLocked() {
         lanListeners.closeAll()
-        activeClients.retain { !it.lan }
+        activeClients.retain { it.via == null }
         lanTargets = emptyList()
         _lanEndpoint.value = null
         _lanEndpoints.value = emptyList()
@@ -865,7 +868,7 @@ object ShareBridge {
                     } else if (!admit(client, via)) {
                         false
                     } else {
-                        activeClients.add(ActiveClient(client, lan = via != null))
+                        activeClients.add(ActiveClient(client, via))
                         true
                     }
                 }
