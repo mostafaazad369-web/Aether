@@ -11,8 +11,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 
 /**
  * Same outlined navy card language as the shared settings choice sheet.
@@ -57,12 +55,11 @@ internal fun ConfigDialog(onDismissRequest: () -> Unit,
     confirmButton: @Composable () -> Unit, modifier: Modifier = Modifier,
     dismissButton: @Composable (() -> Unit)? = null, title: @Composable (() -> Unit)? = null,
     text: @Composable (() -> Unit)? = null,
-    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.surface,
-    topic: AiTopic = AiTopic.CUSTOM_CONFIGS) {
+    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.surface) {
     val maxHeight = (LocalConfiguration.current.screenHeightDp * .62f).dp
     AlertDialog(onDismissRequest = onDismissRequest, modifier = modifier,
         shape = RoundedCornerShape(28.dp), containerColor = containerColor,
-        title = { Row { Column(Modifier.weight(1f)) { title?.invoke() }; AiTopicIcon(topic) } },
+        title = title,
         text = text?.let { body -> { Column(Modifier.fillMaxWidth().heightIn(max = maxHeight)
             .verticalScroll(rememberScrollState())) { body() } } },
         confirmButton = confirmButton, dismissButton = dismissButton)

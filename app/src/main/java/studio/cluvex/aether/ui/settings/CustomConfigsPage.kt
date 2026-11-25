@@ -4,8 +4,6 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -247,7 +245,7 @@ internal fun CustomConfigsPage(
     SettingsScaffold(stringResource(R.string.cc_title), onBack, Modifier.fillMaxSize()) {
         if (!editable) {
             settingsSection {
-            GroupCaption(stringResource(R.string.cc_title), aiTopic = AiTopic.CUSTOM_CONFIGS)
+            GroupCaption(stringResource(R.string.cc_title), )
                 SettingsGroup {
                     SettingsNoticeRow(
                         text = stringResource(R.string.settings_locked_hint),
@@ -260,7 +258,7 @@ internal fun CustomConfigsPage(
         settingsSection {
             SettingsGroup {
                 SettingsSwitchRow(
-                    title = stringResource(R.string.cc_enable), aiTopic = AiTopic.CUSTOM_CONFIGS,
+                    title = stringResource(R.string.cc_enable), 
                     summary = if (active == null) {
                         stringResource(R.string.cc_enable_need)
                     } else {
@@ -273,7 +271,7 @@ internal fun CustomConfigsPage(
                 )
                 RowDivider()
                 SettingsChoiceRow(
-                    title = stringResource(R.string.cc_chain_title), aiTopic = AiTopic.CUSTOM_CHAIN,
+                    title = stringResource(R.string.cc_chain_title), 
                     summary = stringResource(R.string.cc_chain_desc),
                     icon = Icons.Rounded.Route,
                     options = ChainMode.entries.toList(),
@@ -290,7 +288,7 @@ internal fun CustomConfigsPage(
         settingsSection {
             SettingsGroup {
                 SettingsSwitchRow(
-                    title = stringResource(R.string.cc_verify), aiTopic = AiTopic.CUSTOM_VERIFY,
+                    title = stringResource(R.string.cc_verify), 
                     summary = stringResource(R.string.cc_verify_desc),
                     icon = Icons.Rounded.Info, checked = st.verifyConnection, enabled = editable,
                     onCheckedChange = { CustomConfigStore.setVerify(context, it) },
@@ -298,14 +296,14 @@ internal fun CustomConfigsPage(
                 // 1.6.0: same inset divider as the Enable/Chain card above.
                 RowDivider()
                 SettingsSwitchRow(
-                    title = stringResource(R.string.cc_auto), aiTopic = AiTopic.CUSTOM_PING,
+                    title = stringResource(R.string.cc_auto), 
                     summary = stringResource(R.string.cc_auto_desc),
                     icon = Icons.Rounded.Speed, checked = st.autoSelect, enabled = editable,
                     onCheckedChange = { CustomConfigStore.setAutoSelect(context, it) },
                 )
                 RowDivider()
                 SettingsChoiceRow(
-                    title = stringResource(R.string.cc_health_interval), aiTopic = AiTopic.CUSTOM_PING, icon = Icons.Rounded.Speed,
+                    title = stringResource(R.string.cc_health_interval),  icon = Icons.Rounded.Speed,
                     options = listOf(60L, 180L, 300L, 600L, 1800L, 3600L),
                     selected = st.healthIntervalSeconds,
                     label = { "${it / 60} min" }, enabled = editable,
@@ -313,7 +311,7 @@ internal fun CustomConfigsPage(
                 )
                 if (st.configs.isNotEmpty()) {
                     RowDivider()
-                    SettingsSwitchRow(aiTopic = AiTopic.CUSTOM_PING, title = stringResource(R.string.cc_sort_ping_desc),
+                    SettingsSwitchRow( title = stringResource(R.string.cc_sort_ping_desc),
                         summary = stringResource(R.string.cc_sort_ping_desc_summary),
                         icon = Icons.Rounded.Speed,
                         checked = pingSort == ConfigCatalog.PingSort.DESC,
@@ -355,7 +353,6 @@ internal fun CustomConfigsPage(
                     Text(stringResource(if (scanState.running) R.string.cip_stop else R.string.cip_scan_all))
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
-                    AiTopicIcon(AiTopic.CLEAN_IP_SCANNER)
                 }
                 if (scanState.running) Text(stringResource(R.string.cip_group_progress,
                     (scanState.completed + 1).coerceAtMost(scanState.total), scanState.total),
@@ -388,7 +385,7 @@ internal fun CustomConfigsPage(
             settingsSection {
                 SettingsGroup {
                     SettingsActionRow(
-                        aiTopic = AiTopic.CUSTOM_CONFIGS,
+                        
                         title = stringResource(R.string.cc_delete_all),
                         icon = Icons.Rounded.DeleteSweep,
                         destructive = true,

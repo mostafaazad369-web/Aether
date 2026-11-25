@@ -180,7 +180,6 @@ class SecretStore(context: Context) {
         const val ACCESS_SECRET = "access_client_secret"
         const val ACCESS_TOKEN = "access_token"
         const val ACCESS_SIGNIN = "access_signin"
-        const val GEMINI_KEY = "gemini_api_key"
 
         private const val PROVIDER = "AndroidKeyStore"
         private const val KEY_ALIAS = "aether_secret_v1"

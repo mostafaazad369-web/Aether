@@ -1,7 +1,5 @@
 package studio.cluvex.aether.ui
 
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.provider.Settings
@@ -205,7 +203,6 @@ fun SharePanel(
                         },
                     )
                 }
-                AiTopicIcon(AiTopic.SHARE)
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     Icons.Rounded.ExpandMore,
@@ -227,7 +224,6 @@ fun SharePanel(
 
                     // ---- master switch ------------------------------------
                     SwitchLine(
-                        topic = AiTopic.SHARE,
                         title = stringResource(R.string.share_toggle),
                         summary = stringResource(R.string.share_toggle_desc),
                         checked = profile.lanShare,
@@ -249,7 +245,7 @@ fun SharePanel(
 
                     // ---- mode picker --------------------------------------
                     Spacer(Modifier.height(8.dp))
-                    SectionLabel(stringResource(R.string.share_mode_title), AiTopic.SHARE_MODE)
+                    SectionLabel(stringResource(R.string.share_mode_title))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ModeCard(
                             modifier = Modifier.weight(1f),
@@ -445,7 +441,7 @@ private fun ReadyBlock(
     // r6: WebRTC. Browsers send it OUTSIDE a proxy unless locked; the setup page
     // tests it live against the tunnel exit and serves the one-click locks.
     Spacer(Modifier.height(12.dp))
-    SectionLabel(stringResource(R.string.share_webrtc_title), AiTopic.SHARE_WEBRTC)
+    SectionLabel(stringResource(R.string.share_webrtc_title))
     Notice(Icons.Rounded.Shield, stringResource(R.string.share_webrtc_desc), AetherAmber)
     ValueRow(label = stringResource(R.string.share_setup_label), value = setup)
 
@@ -525,7 +521,6 @@ private fun AuthSection(
 
     SwitchLine(
         icon = Icons.Rounded.Lock,
-        topic = AiTopic.SHARE_AUTH,
         title = stringResource(R.string.share_auth_toggle),
         summary = stringResource(
             if (recommend) R.string.share_auth_toggle_desc_home else R.string.share_auth_toggle_desc,
@@ -571,7 +566,6 @@ private fun AuthSection(
             onDismissRequest = { editing = false },
             title = { Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.share_auth_edit_title), Modifier.weight(1f))
-                AiTopicIcon(AiTopic.SHARE_AUTH)
             } },
             text = {
                 Column {
@@ -649,19 +643,17 @@ private fun Divider() {
 }
 
 @Composable
-private fun SectionLabel(text: String, topic: AiTopic = AiTopic.SHARE) {
+private fun SectionLabel(text: String) {
     Row(verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp)) {
         Text(text = text, style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f))
-        AiTopicIcon(topic)
     }
 }
 
 @Composable
 private fun SwitchLine(
-    topic: AiTopic,
     title: String,
     summary: String,
     checked: Boolean,
@@ -683,7 +675,6 @@ private fun SwitchLine(
             Text(text = title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(text = summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        AiTopicIcon(topic)
         Spacer(Modifier.width(8.dp))
         Switch(checked = checked, onCheckedChange = null)
     }

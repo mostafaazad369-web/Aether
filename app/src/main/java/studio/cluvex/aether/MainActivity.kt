@@ -48,7 +48,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import studio.cluvex.aether.ai.AiSession
 import studio.cluvex.aether.core.AetherController
 import studio.cluvex.aether.core.IpEndpoint
 import studio.cluvex.aether.core.NetProbe
@@ -277,24 +276,6 @@ class MainActivity : ComponentActivity() {
                         "connected" -> {
                             // The service owns exit-IP lookup for the actual Connected.socksAddr.
                             // No 100-second UI wait or fallback to the unrelated engine port.
-                            // Optional AI analysis belongs to the established session.
-                            // Exit-IP metadata is now independently fetched by the service;
-                            // it is not a prerequisite for UI state or analysis of startup logs.
-                            uiProfile.value?.let { current ->
-                                AiSession.analyze(
-                                    profile = current,
-                                    state = AetherController.state.value,
-                                    persian = LanguagePrefs.isPersian(this@MainActivity),
-                                    auto = true,
-                                    onApply = { patched ->
-                                        // The UI owns the profile (see uiProfile), so
-                                        // an AI-applied change goes through exactly
-                                        // the same path a tapped switch does.
-                                        uiProfile.value = patched
-                                        profileSaves.tryEmit(patched)
-                                    },
-                                )
-                            }
                         }
                         "idle" -> {
                             AetherController.setIpInfo(null)

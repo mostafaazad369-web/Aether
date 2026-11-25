@@ -290,8 +290,6 @@
     <!-- 1.2.4: desktop-parity info row under the IP badge -->
     <string name="meta_protocol">Protocol</string>
     <string name="meta_latency">Latency</string>
-
-    <!-- Core 1.7.0 features retained in 1.2.7 -->
     <string name="route_sniff_title">Match domain rules behind the tunnel</string>
     <string name="route_sniff_desc">Reads the site name from the TLS/HTTP handshake, so the domain rules above also work on Android, where the engine otherwise only sees an IP address.</string>
     <string name="route_sniff_ms_label">Name wait window (ms)</string>
@@ -370,31 +368,7 @@
          sentence into a right-to-left screen, which is how a localised app
          rots one string at a time.
          ================================================================= -->
-    <string name="ai_title">Aether AI</string>
-    <string name="ai_subtitle">Gemini inside the app: explanations, tuning and chat</string>
-    <string name="ai_badge">AI</string>
-    <string name="cat_ai">Assistant</string>
-    <string name="cat_ai_desc">Explains any setting, reads the log, proposes tuning</string>
-
     <!-- key -->
-    <string name="ai_section_key">Gemini API key</string>
-    <string name="ai_key_label">API key</string>
-    <string name="ai_key_hint">AIza…</string>
-    <string name="ai_key_help">Get a free key from Google AI Studio (aistudio.google.com/apikey). It is stored on this phone sealed with a hardware-backed key, it is sent only to Google, and only ever through the tunnel. Resetting the app settings does not delete it.</string>
-    <string name="ai_key_show">Show</string>
-    <string name="ai_key_hide">Hide</string>
-    <string name="ai_key_paste">Paste</string>
-    <string name="ai_key_forget">Forget the key and the model list</string>
-    <string name="ai_key_forgotten">API key removed</string>
-    <string name="ai_key_storage_unavailable">Android Keystore is unavailable. The saved API key cannot be read or updated, so AI requests are disabled.</string>
-    <string name="ai_key_storage_corrupt">The encrypted API key is damaged and was preserved. AI requests are disabled until the credential storage issue is resolved.</string>
-    <string name="ai_key_storage_failure">Secure credential storage failed. The API key was not accepted; AI requests are disabled.</string>
-    <string name="ai_key_forget_failed">The API key could not be securely removed. No success was reported; check the credential storage status.</string>
-    <string name="ai_test">Test the API connection</string>
-    <string name="ai_test_hint">Checks the key and lists the models it may use</string>
-    <string name="ai_test_running">Testing…</string>
-    <string name="ai_test_ok">Working — %1$d model(s) available through %2$s</string>
-    <string name="ai_test_failed">Not working: %1$s</string>
     <string name="a11y_connect">Connect</string>
     <string name="a11y_disconnect">Disconnect</string>
     <string name="a11y_cancel_connecting">Cancel connecting</string>
@@ -407,73 +381,11 @@
     <string name="a11y_select_message">Select message</string>
 
     <!-- models -->
-    <string name="ai_section_models">Models your key can use</string>
-    <string name="ai_model_label">Model</string>
-    <string name="ai_models_count">%1$d available</string>
-    <string name="ai_models_empty">No models discovered yet. Connect, then run the API test: the list is read from your own key, so it shows exactly the models that key is allowed to use.</string>
-    <string name="ai_models_refresh">Refresh the model list</string>
-
     <!-- behaviour -->
-    <string name="ai_section_behaviour">Behaviour</string>
-    <string name="ai_auto_optimize">Analyse the log on every connect</string>
-    <string name="ai_auto_optimize_desc">Off by default. When on, Gemini reads a redacted excerpt of this session\'s log after each successful connect and proposes settings that fit it, and the AI chat can read the current log automatically whenever you ask about it. Addresses and identifiers are masked before anything is sent.</string>
-    <string name="ai_auto_apply">Apply proposals automatically</string>
-    <string name="ai_auto_apply_desc">Write proposals straight into the settings instead of waiting for you to review them. Off by default, because a setting that changes on its own is hard to tell apart from a bug.</string>
-    <string name="ai_hints">Show AI icons next to options</string>
-    <string name="ai_hints_desc">Tap the icon beside any setting and Gemini explains what it is, what it is for and how to use it.</string>
-
     <!-- chat -->
-    <string name="ai_chat_open">Chat with Gemini</string>
-    <string name="ai_chat_subtitle">Ask anything, or say what you want changed</string>
-    <string name="ai_chat_model">Model: %1$s</string>
-    <string name="ai_chat_empty_title">Hi, I am Aether AI</string>
-    <string name="ai_chat_empty_body">I can explain any setting in this app, read this session\'s log and propose tuning, or just answer a question.</string>
-    <string name="ai_chat_suggest_1">Why is my connection slow right now?</string>
-    <string name="ai_chat_suggest_2">Which protocol should I use on mobile data?</string>
-    <string name="ai_chat_suggest_3">Explain MTU and pick the best one for me</string>
-    <string name="ai_chat_suggest_4">Make the tunnel harder to detect</string>
-    <string name="ai_chat_input_hint">Ask Aether AI…</string>
-    <string name="ai_chat_send">Send</string>
-    <string name="ai_chat_stop">Stop</string>
-    <string name="ai_chat_clear">Clear the conversation</string>
-    <string name="ai_chat_thinking">Thinking…</string>
-    <string name="ai_chat_copy">Copy answer</string>
-
-    <!-- explain sheet -->
-    <string name="ai_explain_title">What is this?</string>
-    <string name="ai_explain_loading">Asking Gemini…</string>
-    <string name="ai_explain_failed">%1$s</string>
-    <string name="ai_explain_retry">Try again</string>
-
     <!-- advisor -->
-    <string name="ai_advisor_title">Settings advisor</string>
-    <string name="ai_advisor_subtitle">What your network is doing, and the settings that fit it</string>
-    <string name="ai_advisor_run">Analyse this session</string>
-    <string name="ai_advisor_running">Reading the log and thinking…</string>
-    <string name="ai_advisor_idle">Gemini reads a redacted excerpt of this session\'s log — credentials removed, public addresses masked — and proposes tuning. Nothing changes until you press Apply.</string>
-    <string name="ai_advisor_failed">Could not analyse: %1$s</string>
-    <string name="ai_advisor_dpi">What your network appears to be doing</string>
-    <string name="ai_advisor_confidence">Confidence: %1$s</string>
-    <string name="ai_advisor_no_changes">Nothing worth changing — this session looks healthy.</string>
-    <string name="ai_confidence_high">high</string>
-    <string name="ai_confidence_medium">medium</string>
-    <string name="ai_confidence_low">low</string>
-
     <!-- proposals -->
-    <string name="ai_changes_title">Proposed settings (%1$d)</string>
-    <string name="ai_apply">Apply</string>
-    <string name="ai_applied">Applied</string>
-    <string name="ai_apply_note">Tunnel settings are handed to the engine when it starts, so these take effect on your next connect.</string>
-    <string name="ai_dismiss">Dismiss</string>
-
     <!-- gate -->
-    <string name="ai_gate_no_key">Add your Gemini API key to use the AI features.</string>
-    <string name="ai_gate_no_model">No model selected yet. Run the API test and one will be picked for you.</string>
-    <string name="ai_gate_disconnected">The AI needs the tunnel. Connect first: Google\'s AI endpoints are not reachable directly, and Aether\'s own traffic deliberately bypasses the tunnel it builds.</string>
-    <string name="ai_gate_wrong_mode">Switch the network backend to Aether → Psiphon. Google\'s AI endpoints refuse plain Aether/WARP exit addresses, which is why the AI only runs in the chained mode.</string>
-    <string name="ai_gate_fix_key">Open AI settings</string>
-    <string name="ai_gate_fix_mode">Open connection settings</string>
-
     <!-- errors -->
     <!--
       1.3.1, issues #31 and #11. Google retired the old "standard" Gemini API keys
@@ -483,51 +395,8 @@
       to work and now does not is far more likely to be a retired key than a typo,
       so the message says so first.
     -->
-    <string name="ai_error_bad_key">Your API key was rejected. Google retired the old “standard” Gemini keys in 2026 — if this key used to work, create a new one in Google AI Studio and paste that instead.</string>
-    <string name="ai_error_rate_limit">Rate limit or quota reached. Wait a moment and retry.</string>
-    <string name="ai_error_no_model">That model is not available to your key. Refresh the model list.</string>
-    <string name="ai_error_transport">Could not reach Google through the tunnel.</string>
-    <string name="ai_error_protocol">Google\'s answer could not be read.</string>
-    <string name="ai_error_blocked">Gemini declined to answer that.</string>
-
     <!-- small print -->
-    <string name="ai_privacy_title">What leaves your device</string>
-    <string name="ai_privacy_body">Only what a request needs: your prompt, the name of the setting you asked about, and your current tuning values. The log analysis adds a redacted excerpt of the log, with credentials stripped and public addresses masked to their /16. Everything travels to Google through the tunnel, never directly.</string>
-    <string name="ai_scope_title">What the AI may change</string>
-    <string name="ai_scope_body">Tuning only: protocol, obfuscation, MTU, fragmentation, DNS, reconnect behaviour and the like. It can never change the network backend, the upstream proxy, routing rules, which apps are tunnelled, or any credential — those decide which traffic is protected, so they stay in your hands.</string>
-
-    <!-- ===== 1.2.9 AI additions ===================================== -->
-    <string name="ai_error_server">Google\'s AI service failed to answer. This is on their side, not your connection.</string>
-    <string name="ai_error_truncated">The answer was cut off before it finished. Try again.</string>
-    <string name="ai_advisor_unreadable">The model did not answer in the format the app needs, twice in a row. Try again, or pick another model.</string>
-    <string name="ai_advisor_empty_log">There is nothing in the connection log to analyse yet. Connect first, then run the analysis.</string>
-    <string name="ai_models_none_allowed">Your key can reach Google, but none of the models this app supports are available to it. Supported models:\n%1$s</string>
-    <string name="ai_models_filtered">Only the supported Flash models are shown</string>
-    <string name="ai_models_help">Only fast Flash models that answer reliably on a free key are listed. Gemini 3.1 Flash-Lite is the default because it has the highest free daily limit; the newer Flash models answer faster but hit the daily limit sooner. Image, video, audio and Pro models are hidden.</string>
     <!-- 1.4.0-r5: per-model guidance in the model picker -->
-    <string name="ai_model_desc_default">Default · highest daily limit, best for continuous everyday use</string>
-    <string name="ai_model_desc_fast">Very fast · reaches the free daily limit sooner</string>
-    <string name="ai_model_desc_alt">Flash-Lite family · high daily limit (alias/preview build)</string>
-    <string name="ai_applied_dialog_title">Saved for the next connection</string>
-    <string name="ai_applied_dialog_body">The new settings are stored, but the tunnel is already running with the old ones. Tunnel settings are handed to the engine when it starts, so disconnect and connect again for them to take effect.</string>
-    <string name="ai_applied_dialog_ok">Got it</string>
-    <string name="ai_explain_ask_chat">Did not understand? Ask the assistant</string>
-    <string name="ai_chat_retry">Try again</string>
-    <string name="ai_chat_edit">Edit</string>
-    <string name="ai_chat_delete">Delete</string>
-    <string name="ai_chat_edited">edited</string>
-    <string name="ai_chat_cancel">Cancel</string>
-    <string name="ai_chat_edit_title">Edit message</string>
-    <string name="ai_chat_edit_send">Send again</string>
-    <string name="ai_chat_edit_note">Everything after this message will be removed and the assistant will answer the edited question.</string>
-    <string name="ai_chat_selected">%1$d selected</string>
-    <string name="ai_chat_select_all">Select all</string>
-    <string name="ai_chat_selection_cancel">Cancel selection</string>
-    <string name="ai_chat_delete_selected">Delete selected</string>
-    <string name="ai_chat_delete_title">Delete %1$d message(s)?</string>
-    <string name="ai_chat_delete_body">This cannot be undone. Deleted messages are not sent to the assistant as context any more.</string>
-    <string name="ai_chat_delete_confirm">Delete</string>
-
     <!-- Tor (1.3.0, engine core 2.0.0) -->
     <string name="protocol_mim">MASQUE×2</string>
     <string name="state_tor_bootstrap">Building Tor circuits…</string>
@@ -552,8 +421,6 @@
     <string name="tor_bridge_lines_hint">obfs4 192.0.2.55:38114 &lt;FINGERPRINT&gt; cert=… iat-mode=0</string>
     <string name="tor_bridge_lines_desc">One per line, in the format bridges.torproject.org hands out. Leave empty to use the bridges the app fetches for your country. A line naming a transport the app does not ship is ignored.</string>
     <string name="tor_group_footer">Tor carries TCP only — in every app, on every platform. Aether answers DNS over TCP inside Tor and drops other UDP, so QUIC-capable apps fall back to TCP. That is normal and nothing is leaking: dropped UDP goes nowhere, least of all around Tor. Expect noticeably higher latency, and expect the first connect to take a while — Tor downloads its directory before it can build a circuit.</string>
-
-    <!-- Tor reverse chain (1.3.0) -->
     <string name="backend_help_tor_aether">The reverse chain: Tor first, then the Aether tunnel built INSIDE it. Your exit is a WARP address — the same as plain Aether — but the network you are on sees only Tor, and cannot tell that a VPN tunnel exists at all. Use it where Cloudflare/WARP itself is blocked or throttled but Tor still gets through. Carries normal UDP, unlike the Tor-exit modes.</string>
     <string name="protocol_forced_reverse">Fixed to MASQUE over HTTP/2 in this mode. Tor carries TCP only and WARP’s WireGuard endpoints answer on UDP alone, so the engine refuses WireGuard and WARP×2 here.</string>
 
@@ -568,8 +435,6 @@
     <string name="tor_check_title">Reachability check</string>
     <string name="tor_check_hint">check.torproject.org:443</string>
     <string name="tor_check_desc">The address Tor must reach before the bootstrap counts as working. Change it only if bootstrap keeps failing on a Tor that seems fine — the default target is itself blocked on some networks.</string>
-
-    <!-- Zero Trust e-mail login code (1.3.1, issue #12) -->
     <string name="zt_code_title">Enter your login code</string>
     <string name="zt_code_body">Your organization e-mailed a one-time code to %1$s. Type it here to finish joining.</string>
     <string name="zt_code_body_noaddr">Your organization e-mailed you a one-time code. Type it here to finish joining.</string>
@@ -897,8 +762,6 @@
     <string name="cc_sub_update">Refresh link</string>
     <string name="cc_sub_url">Link URL</string>
     <string name="cc_sub_updated">Link updated</string>
-
-    <!-- Same-version functional repair: catalog, selection feedback and built-in verification. -->
     <string name="cc_tab_all">All</string>
     <string name="cc_add_config">Add config</string>
     <string name="cc_col_name">Server name</string>

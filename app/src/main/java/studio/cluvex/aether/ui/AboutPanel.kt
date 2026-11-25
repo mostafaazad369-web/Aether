@@ -1,7 +1,5 @@
 package studio.cluvex.aether.ui
 
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -117,7 +115,6 @@ fun AboutPanel(modifier: Modifier = Modifier, startExpanded: Boolean = false) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                AiTopicIcon(AiTopic.ABOUT)
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     imageVector = Icons.Rounded.ExpandMore,

@@ -263,27 +263,6 @@ with one tap.
 > networks you trust; **Generate a new password** revokes old access. Sharing
 > stops when the VPN disconnects.
 
-## Gemini AI assistant
-
-Optional and off until you add a key.
-
-1. Get a free key from [Google AI Studio](https://aistudio.google.com/apikey).
-2. **Settings → Assistant** → paste the key → **Test the API connection** → pick a model.
-3. Use it for:
-   - **Settings advisor:** reads a redacted excerpt of this session's log and
-     suggests settings; nothing changes until you tap **Apply**.
-   - **AI icons** next to each setting with an explanation in your language.
-   - **Chat** (Assistant → Chat, or the AI button on the home screen).
-
-The key is stored encrypted in the Android Keystore. Credentials and public IP
-addresses are removed from anything sent. The assistant can only change tuning
-options (protocol, scan mode, obfuscation, MTU, timings and similar); it can never
-change the mode, routing, split tunnelling, sharing or Zero Trust credentials.
-Changes apply on the next connect.
-
-AI requests go through the tunnel, so the assistant works only while connected
-in `Aether → Psiphon` mode (Google's AI endpoints refuse WARP exit addresses).
-
 ## Privacy: where your traffic goes
 
 - Traffic is encrypted on the phone (WireGuard or MASQUE) and leaves through

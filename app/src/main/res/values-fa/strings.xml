@@ -359,31 +359,7 @@
          ‏۱.۲.۹ - قابلیت‌های هوش مصنوعی Gemini.
          هر کلید این بخش باید در values/strings.xml هم وجود داشته باشد.
          ================================================================= -->
-    <string name="ai_title">هوش مصنوعی اتر</string>
-    <string name="ai_subtitle">‏⁨Gemini⁩ داخل برنامه: توضیح، بهینه‌سازی و چت</string>
-    <string name="ai_badge">⁨AI⁩</string>
-    <string name="cat_ai">دستیار</string>
-    <string name="cat_ai_desc">هر گزینه را توضیح می‌دهد، لاگ را می‌خواند و تنظیمات پیشنهاد می‌کند</string>
-
     <!-- کلید -->
-    <string name="ai_section_key">کلید ⁨API⁩ جمینای</string>
-    <string name="ai_key_label">کلید ⁨API⁩</string>
-    <string name="ai_key_hint">⁨AIza⁩…</string>
-    <string name="ai_key_help">کلید رایگان را از ⁨Google AI Studio⁩ بگیرید (⁨aistudio.google.com/apikey⁩). این کلید روی همین گوشی و رمزنگاری‌شده با کلید سخت‌افزاری ذخیره می‌شود، فقط برای گوگل فرستاده می‌شود و همیشه از داخل تونل. بازگرداندن تنظیمات برنامه آن را پاک نمی‌کند.</string>
-    <string name="ai_key_show">نمایش</string>
-    <string name="ai_key_hide">پنهان</string>
-    <string name="ai_key_paste">جای‌گذاری</string>
-    <string name="ai_key_forget">پاک کردن کلید و فهرست مدل‌ها</string>
-    <string name="ai_key_forgotten">کلید ⁨API⁩ پاک شد</string>
-    <string name="ai_key_storage_unavailable">ذخیره‌ساز امن اندروید در دسترس نیست. کلید ذخیره‌شده خوانده یا به‌روزرسانی نمی‌شود؛ درخواست‌های هوش مصنوعی غیرفعال‌اند.</string>
-    <string name="ai_key_storage_corrupt">دادهٔ رمزنگاری‌شدهٔ کلید آسیب دیده و حفظ شده است. تا رفع مشکل ذخیره‌سازی اعتبارنامه، درخواست‌های هوش مصنوعی غیرفعال می‌مانند.</string>
-    <string name="ai_key_storage_failure">ذخیره‌سازی امن اعتبارنامه ناموفق بود. کلید تأیید نشده و درخواست‌های هوش مصنوعی غیرفعال‌اند.</string>
-    <string name="ai_key_forget_failed">پاک‌سازی امن کلید ناموفق بود. پیام موفقیت نمایش داده نشد؛ وضعیت ذخیره‌سازی اعتبارنامه را بررسی کنید.</string>
-    <string name="ai_test">تست اتصال به ⁨API⁩</string>
-    <string name="ai_test_hint">کلید را بررسی می‌کند و مدل‌های مجاز آن را فهرست می‌کند</string>
-    <string name="ai_test_running">در حال تست…</string>
-    <string name="ai_test_ok">سالم است — %1$d مدل از مسیر %2$s در دسترس است</string>
-    <string name="ai_test_failed">ناموفق: %1$s</string>
     <string name="a11y_connect">اتصال</string>
     <string name="a11y_disconnect">قطع اتصال</string>
     <string name="a11y_cancel_connecting">لغو اتصال</string>
@@ -396,119 +372,14 @@
     <string name="a11y_select_message">انتخاب پیام</string>
 
     <!-- مدل‌ها -->
-    <string name="ai_section_models">مدل‌هایی که کلید شما می‌تواند استفاده کند</string>
-    <string name="ai_model_label">مدل</string>
-    <string name="ai_models_count">‏%1$d مدل در دسترس</string>
-    <string name="ai_models_empty">هنوز مدلی پیدا نشده است. اول وصل شوید و بعد تست ⁨API⁩ را بزنید: فهرست از خودِ کلید شما خوانده می‌شود، پس دقیقاً همان مدل‌هایی را نشان می‌دهد که آن کلید اجازهٔ استفاده از آن‌ها را دارد.</string>
-    <string name="ai_models_refresh">به‌روزرسانی فهرست مدل‌ها</string>
-
     <!-- رفتار -->
-    <string name="ai_section_behaviour">رفتار دستیار</string>
-    <string name="ai_auto_optimize">بررسی لاگ در هر بار اتصال</string>
-    <string name="ai_auto_optimize_desc">به‌صورت پیش‌فرض خاموش است. با روشن کردن آن، جمینای پس از هر اتصال موفق بخشی پاک‌سازی‌شده از لاگ همین نشست را می‌خواند و تنظیمات مناسب را پیشنهاد می‌دهد، و چت هوش مصنوعی هم هر وقت دربارهٔ لاگ بپرسید، لاگ فعلی را خودکار می‌خواند. آدرس‌ها و شناسه‌ها پیش از ارسال پوشانده می‌شوند.</string>
-    <string name="ai_auto_apply">اعمال خودکار پیشنهادها</string>
-    <string name="ai_auto_apply_desc">پیشنهادها مستقیم در تنظیمات نوشته شوند، بدون اینکه منتظر تأیید شما بمانند. به‌صورت پیش‌فرض خاموش است، چون تنظیمی که خودش عوض می‌شود از یک اشکال قابل تشخیص نیست.</string>
-    <string name="ai_hints">نمایش آیکن ⁨AI⁩ کنار گزینه‌ها</string>
-    <string name="ai_hints_desc">روی آیکن کنار هر تنظیم بزنید و جمینای می‌گوید آن تنظیم چیست، چه کاربردی دارد و چطور باید از آن استفاده کرد.</string>
-
     <!-- چت -->
-    <string name="ai_chat_open">گفت‌وگو با جمینای</string>
-    <string name="ai_chat_subtitle">هر چیزی بپرسید، یا بگویید چه چیزی عوض شود</string>
-    <string name="ai_chat_model">مدل: %1$s</string>
-    <string name="ai_chat_empty_title">سلام، من هوش مصنوعی اتر هستم</string>
-    <string name="ai_chat_empty_body">می‌توانم هر تنظیمی در این برنامه را توضیح بدهم، لاگ همین نشست را بخوانم و تنظیمات پیشنهاد کنم، یا فقط به سؤالتان جواب بدهم.</string>
-    <string name="ai_chat_suggest_1">چرا اتصالم الان کند است؟</string>
-    <string name="ai_chat_suggest_2">روی دیتای همراه چه پروتکلی بهتر است؟</string>
-    <string name="ai_chat_suggest_3">‏⁨MTU⁩ را توضیح بده و بهترینش را انتخاب کن</string>
-    <string name="ai_chat_suggest_4">تونل را سخت‌تر قابل تشخیص کن</string>
-    <string name="ai_chat_input_hint">از هوش مصنوعی اتر بپرسید…</string>
-    <string name="ai_chat_send">ارسال</string>
-    <string name="ai_chat_stop">توقف</string>
-    <string name="ai_chat_clear">پاک کردن گفت‌وگو</string>
-    <string name="ai_chat_thinking">در حال فکر کردن…</string>
-    <string name="ai_chat_copy">کپی پاسخ</string>
-
     <!-- شیت توضیح -->
-    <string name="ai_explain_title">این چیست؟</string>
-    <string name="ai_explain_loading">در حال پرسیدن از جمینای…</string>
-    <string name="ai_explain_failed">%1$s</string>
-    <string name="ai_explain_retry">تلاش دوباره</string>
-
     <!-- مشاور تنظیمات -->
-    <string name="ai_advisor_title">مشاور تنظیمات</string>
-    <string name="ai_advisor_subtitle">شبکهٔ شما چه می‌کند و چه تنظیماتی با آن می‌خواند</string>
-    <string name="ai_advisor_run">بررسی این نشست</string>
-    <string name="ai_advisor_running">در حال خواندن لاگ و تحلیل…</string>
-    <string name="ai_advisor_idle">جمینای بخشی از لاگ همین نشست را می‌خواند — بدون هیچ اطلاعات محرمانه و با آدرس‌های عمومی ماسک‌شده — و تنظیمات پیشنهاد می‌دهد. تا زمانی که «اعمال» را نزنید هیچ چیزی عوض نمی‌شود.</string>
-    <string name="ai_advisor_failed">تحلیل ممکن نشد: %1$s</string>
-    <string name="ai_advisor_dpi">به نظر می‌رسد شبکهٔ شما این کار را می‌کند</string>
-    <string name="ai_advisor_confidence">اطمینان: %1$s</string>
-    <string name="ai_advisor_no_changes">چیزی برای تغییر نیست — این نشست سالم به نظر می‌رسد.</string>
-    <string name="ai_confidence_high">بالا</string>
-    <string name="ai_confidence_medium">متوسط</string>
-    <string name="ai_confidence_low">پایین</string>
-
     <!-- پیشنهادها -->
-    <string name="ai_changes_title">تنظیمات پیشنهادی (%1$d)</string>
-    <string name="ai_apply">اعمال</string>
-    <string name="ai_applied">اعمال شد</string>
-    <string name="ai_apply_note">تنظیمات تونل هنگام راه‌اندازی به موتور داده می‌شوند، پس این تغییرها در اتصال بعدی اثر می‌گذارند.</string>
-    <string name="ai_dismiss">بستن</string>
-
-    <!-- شرط‌های استفاده از هوش مصنوعی -->
-    <string name="ai_gate_no_key">برای استفاده از قابلیت‌های هوش مصنوعی، کلید ⁨API⁩ جمینای خود را وارد کنید.</string>
-    <string name="ai_gate_no_model">هنوز مدلی انتخاب نشده است. تست ⁨API⁩ را بزنید تا یکی برایتان انتخاب شود.</string>
-    <string name="ai_gate_disconnected">هوش مصنوعی به تونل نیاز دارد. اول وصل شوید: سرویس‌های هوش مصنوعی گوگل مستقیم در دسترس نیستند و ترافیک خودِ اتر عمداً از تونلی که می‌سازد رد نمی‌شود.</string>
-    <string name="ai_gate_wrong_mode">حالت شبکه را روی ⁨Aether → Psiphon⁩ بگذارید. سرویس‌های هوش مصنوعی گوگل آدرس‌های خروجی اتر/⁨WARP⁩ را نمی‌پذیرند؛ به همین دلیل هوش مصنوعی فقط در حالت ترکیبی کار می‌کند.</string>
-    <string name="ai_gate_fix_key">رفتن به تنظیمات هوش مصنوعی</string>
-    <string name="ai_gate_fix_mode">رفتن به تنظیمات اتصال</string>
-
     <!-- خطاها -->
-    <string name="ai_error_bad_key">کلید ⁨API⁩ شما پذیرفته نشد. گوگل در سال ۲۰۲۶ کلیدهای «⁨standard⁩» قدیمی جمینای را بازنشسته کرد — اگر این کلید قبلاً کار می‌کرد، در ⁨Google AI Studio⁩ یک کلید تازه بسازید و همان را بچسبانید.</string>
-    <string name="ai_error_rate_limit">به سقف مصرف یا محدودیت سرعت رسیدید. کمی صبر کنید و دوباره امتحان کنید.</string>
-    <string name="ai_error_no_model">این مدل برای کلید شما در دسترس نیست. فهرست مدل‌ها را به‌روز کنید.</string>
-    <string name="ai_error_transport">از داخل تونل نشد به گوگل رسید.</string>
-    <string name="ai_error_protocol">پاسخ گوگل قابل خواندن نبود.</string>
-    <string name="ai_error_blocked">جمینای از پاسخ دادن به آن خودداری کرد.</string>
-
     <!-- توضیح شفاف -->
-    <string name="ai_privacy_title">چه چیزی از گوشی شما بیرون می‌رود</string>
-    <string name="ai_privacy_body">فقط چیزی که هر درخواست لازم دارد: متن پرسش شما، نام تنظیمی که دربارهٔ آن پرسیده‌اید و مقدارهای فعلی تنظیمات. تحلیل لاگ یک بخش پاک‌سازی‌شده از لاگ را هم اضافه می‌کند: اطلاعات محرمانه حذف و آدرس‌های عمومی تا /16 ماسک می‌شوند. همهٔ این‌ها از داخل تونل به گوگل می‌رسند، هرگز به‌صورت مستقیم.</string>
-    <string name="ai_scope_title">هوش مصنوعی چه چیزی را می‌تواند تغییر دهد</string>
-    <string name="ai_scope_body">فقط تنظیمات بهینه‌سازی: پروتکل، مبهم‌سازی، ⁨MTU⁩، تکه‌تکه‌کردن، ⁨DNS⁩، رفتار اتصال مجدد و مانند این‌ها. هرگز نمی‌تواند حالت شبکه، پراکسی بالادست، قواعد مسیریابی، اینکه کدام برنامه‌ها از تونل رد می‌شوند یا هیچ اطلاعات محرمانه‌ای را عوض کند — این‌ها تعیین می‌کنند کدام ترافیک محافظت می‌شود، پس در دست خودتان می‌مانند.</string>
-
-    <!-- ===== افزوده‌های هوش مصنوعی در ۱.۲.۹ ========================= -->
-    <string name="ai_error_server">سرویس هوش مصنوعی گوگل نتوانست پاسخ دهد. مشکل از سمت گوگل است، نه از اتصال شما.</string>
-    <string name="ai_error_truncated">پاسخ پیش از تمام شدن قطع شد. دوباره تلاش کنید.</string>
-    <string name="ai_advisor_unreadable">مدل دو بار پشت سر هم پاسخ را در قالبی که برنامه لازم دارد نداد. دوباره تلاش کنید یا مدل دیگری انتخاب کنید.</string>
-    <string name="ai_advisor_empty_log">هنوز چیزی در گزارش اتصال برای تحلیل وجود ندارد. اول وصل شوید، بعد تحلیل را اجرا کنید.</string>
-    <string name="ai_models_none_allowed">کلید شما به گوگل می‌رسد، اما هیچ‌کدام از مدل‌هایی که این برنامه پشتیبانی می‌کند برای آن در دسترس نیست. مدل‌های پشتیبانی‌شده:\n%1$s</string>
-    <string name="ai_models_filtered">فقط مدل‌های ⁨Flash⁩ پشتیبانی‌شده نمایش داده می‌شوند</string>
-    <string name="ai_models_help">فقط مدل‌های سریع ⁨Flash⁩ که روی کلید رایگان قابل‌اعتماد پاسخ می‌دهند نمایش داده می‌شوند. ⁨Gemini 3.1 Flash-Lite⁩ پیش‌فرض است چون بیشترین سقف مصرف روزانهٔ رایگان را دارد؛ مدل‌های جدیدتر ⁨Flash⁩ سریع‌ترند اما زودتر به سقف روزانه می‌رسند. مدل‌های تصویر، ویدئو، صوت و ⁨Pro⁩ پنهان شده‌اند.</string>
     <!-- 1.4.0-r5: راهنمای هر مدل در انتخابگر مدل -->
-    <string name="ai_model_desc_default">پیش‌فرض · سقف مصرف روزانهٔ بالا، بهینه برای استفادهٔ مداوم</string>
-    <string name="ai_model_desc_fast">سرعت بالا · رسیدن سریع‌تر به سقف محدودیت روزانه</string>
-    <string name="ai_model_desc_alt">خانوادهٔ ⁨Flash-Lite⁩ · سقف روزانهٔ بالا (نسخهٔ پیش‌نمایش/نام مستعار)</string>
-    <string name="ai_applied_dialog_title">برای اتصال بعدی ذخیره شد</string>
-    <string name="ai_applied_dialog_body">تنظیمات جدید ذخیره شد، اما تونل همچنان با تنظیمات قبلی در حال اجراست. تنظیمات تونل هنگام شروع به موتور داده می‌شود؛ پس یک‌بار قطع و دوباره وصل کنید تا اعمال شوند.</string>
-    <string name="ai_applied_dialog_ok">متوجه شدم</string>
-    <string name="ai_explain_ask_chat">متوجه نشدید؟ از دستیار بپرسید</string>
-    <string name="ai_chat_retry">تلاش مجدد</string>
-    <string name="ai_chat_edit">ویرایش</string>
-    <string name="ai_chat_delete">حذف</string>
-    <string name="ai_chat_edited">ویرایش‌شده</string>
-    <string name="ai_chat_cancel">انصراف</string>
-    <string name="ai_chat_edit_title">ویرایش پیام</string>
-    <string name="ai_chat_edit_send">ارسال دوباره</string>
-    <string name="ai_chat_edit_note">هر چیزی پس از این پیام حذف می‌شود و دستیار به پرسش ویرایش‌شده پاسخ می‌دهد.</string>
-    <string name="ai_chat_selected">‏%1$d مورد انتخاب شد</string>
-    <string name="ai_chat_select_all">انتخاب همه</string>
-    <string name="ai_chat_selection_cancel">لغو انتخاب</string>
-    <string name="ai_chat_delete_selected">حذف موارد انتخاب‌شده</string>
-    <string name="ai_chat_delete_title">‏%1$d پیام حذف شود؟</string>
-    <string name="ai_chat_delete_body">این کار قابل بازگشت نیست. پیام‌های حذف‌شده دیگر به‌عنوان زمینهٔ گفت‌وگو برای دستیار فرستاده نمی‌شوند.</string>
-    <string name="ai_chat_delete_confirm">حذف</string>
-
     <!-- Tor (1.3.0, engine core 2.0.0) -->
     <string name="protocol_mim">⁨MASQUE×2⁩</string>
     <string name="state_tor_bootstrap">در حال ساخت مدارهای تور…</string>
@@ -533,8 +404,6 @@
     <string name="tor_bridge_lines_hint">⁨obfs4 192.0.2.55:38114 &lt;FINGERPRINT&gt; cert=… iat-mode=0⁩</string>
     <string name="tor_bridge_lines_desc">هر خط یکی، در قالبی که ⁨bridges.torproject.org⁩ می‌دهد. خالی بگذارید تا برنامه پل‌های مناسب کشور شما را خودش بگیرد. خطی که نام ترانسپورتی را بگوید که برنامه ندارد، نادیده گرفته می‌شود.</string>
     <string name="tor_group_footer">تور فقط ⁨TCP⁩ را حمل می‌کند — در هر برنامه و روی هر پلتفرم. اتر ⁨DNS⁩ را روی ⁨TCP⁩ داخل تور پاسخ می‌دهد و بقیهٔ ⁨UDP⁩ را دور می‌ریزد، پس برنامه‌هایی که ⁨QUIC⁩ دارند به ⁨TCP⁩ برمی‌گردند. این طبیعی است و چیزی لیک نمی‌شود: ⁨UDP⁩ دورریخته به هیچ‌جا نمی‌رود، چه برسد به دور زدن تور. منتطر تاخیر محسوساً بیشتر باشید، و اینکه اولین اتصال طول بکشد — تور قبل از ساخت مدار، دایرکتوری خود را دانلود می‌کند.</string>
-
-    <!-- Tor reverse chain (1.3.0) -->
     <string name="backend_help_tor_aether">زنجیرهٔ معکوس: اول تور، بعد تونل اتر داخل آن ساخته می‌شود. خروجی شما یک آدرس ⁨WARP⁩ است — همان چیزی که اتر ساده می‌دهد — اما شبکه‌ای که در آن هستید فقط تور را می‌بیند و اصلاً نمی‌تواند بفهمد که تونل ⁨VPN⁩‌ی وجود دارد. جایی به کار بیاید که خود ⁨Cloudflare/WARP⁩ بلاک یا کند شده اما تور هنوز رد می‌شود. برخلاف حالت‌های با خروجی تور، ⁨UDP⁩ عادی را حمل می‌کند.</string>
     <string name="protocol_forced_reverse">در این حالت روی ⁨MASQUE⁩ بر ⁨HTTP/2⁩ قفل است. تور فقط ⁨TCP⁩ را حمل می‌کند و اندپوینت‌های ⁨WireGuard⁩ مربوط به ⁨WARP⁩ فقط روی ⁨UDP⁩ پاسخ می‌دهند، پس موتور اینجا ⁨WireGuard⁩ و ⁨WARP⁩×۲ را قبول نمی‌کند.</string>
 
@@ -867,8 +736,6 @@
     <string name="cc_sub_update">به‌روزرسانی لینک</string>
     <string name="cc_sub_url">آدرس لینک</string>
     <string name="cc_sub_updated">لینک به‌روز شد</string>
-
-    <!-- Same-version functional repair: catalog, selection feedback and built-in verification. -->
     <string name="cc_tab_all">همه</string>
     <string name="cc_add_config">افزودن کانفیگ</string>
     <string name="cc_col_name">نام سرور</string>

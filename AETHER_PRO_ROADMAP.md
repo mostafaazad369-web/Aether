@@ -60,17 +60,10 @@ Aether Pro is a free, personalized English/Persian edition of the Aether Android
 
 - Re-audit signing and release provenance; plan key rotation separately so existing installations are not silently stranded.
 - Review VPN lockdown, DNS/IPv6 leak protection, split tunneling and local proxy sharing.
-- Verify secure storage and redaction for config imports, AI context and diagnostics.
+- Verify secure storage and redaction for config imports and diagnostics.
 - Document threat model, data flows and known limitations.
 
-### Phase 5 — Optional AI assistant
-
-- Keep AI optional and disabled until configured by the user.
-- Reuse the existing redaction and permission boundaries; never send private config credentials or keys.
-- Offer diagnostics explanations and suggested settings, but require explicit user confirmation before applying changes.
-- Provide clear provider, network, privacy and API-key disclosures. AI must not be a paid feature gate in Aether Pro.
-
-### Phase 6 — Release quality
+### Phase 5 — Release quality
 
 - Run unit tests, lint/static checks and Android builds for supported ABIs.
 - Test installation, upgrade and signing compatibility on real devices.
