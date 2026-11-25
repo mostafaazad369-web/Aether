@@ -5,6 +5,7 @@ on:
     branches: [ feature/aether-pro-branding ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 permissions:
   contents: read
