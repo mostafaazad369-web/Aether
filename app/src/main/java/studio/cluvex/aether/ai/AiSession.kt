@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineContext
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.data.AiSettings
 import studio.cluvex.aether.data.GeminiStore
@@ -568,6 +569,7 @@ object AiSession {
         }
 
         val gate = gate(state, profile)
+        if (!isCurrentSession(generation)) throw CancellationException("AI session changed")
         if (!gate.ready) return AiResult.Err(gate.name, AiErrorKind.TRANSPORT)
 
 
@@ -944,7 +946,7 @@ object AiSession {
         }
         if (_advice.value is AiAdviceState.Running) return
 
-        _advice.value = AiAdviceState.Running
+        if (!runIfCurrentSession(generation) { _advice.value = AiAdviceState.Running }) return
         adviceJob?.cancel()
         adviceJob = scope.launch {
             try {
@@ -962,12 +964,15 @@ object AiSession {
                 )
             }.getOrElse { t ->
                 DiagnosticsLog.e("ai", "could not build a redacted digest, analysis skipped: $t")
-                _advice.value = AiAdviceState.Failed(
-                    "log digest failed",
-                    reason = AiAdviceProblem.EMPTY_LOG,
-                )
+                if (isCurrentSession(generation)) {
+                    _advice.value = AiAdviceState.Failed(
+                        "log digest failed",
+                        reason = AiAdviceProblem.EMPTY_LOG,
+                    )
+                }
                 return@launch
             }
+            if (!isCurrentSession(generation)) return@launch
             if (digest.isBlank()) {
                 _advice.value = AiAdviceState.Failed(
                     "empty log",
