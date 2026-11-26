@@ -377,9 +377,8 @@ object ShareBridge {
         closeAllLocked()
         uploadBytesCounter.set(0L)
         downloadBytesCounter.set(0L)
-        // Counts are process-wide active handlers, not per-listener-session state.
-        // Old accepted clients may still be unwinding after their listener closes.
-        _lanClients.value = 0
+        // liveLanClients is process-wide: old-session handlers may still be
+        // unwinding, so never reset its published value at a new-session boundary.
         refusals.set(0L)
         lanClientSeen = false
         idleHintLogged = false
