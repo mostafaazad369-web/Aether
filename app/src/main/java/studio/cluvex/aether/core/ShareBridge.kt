@@ -911,14 +911,14 @@ object ShareBridge {
                             },
                             startWorker = {
                                 Thread({
-                                try {
-                                    client.tcpNoDelay = true
-                                    handler(client)
-                                } catch (_: Exception) {
-                                    // Per-connection errors are non-fatal by design.
-                                } finally {
-                                    admissionRelease.release()
-                                }
+                                    try {
+                                        client.tcpNoDelay = true
+                                        handler(client)
+                                    } catch (_: Exception) {
+                                        // Per-connection errors are non-fatal by design.
+                                    } finally {
+                                        admissionRelease.release()
+                                    }
                                 }, "$name-conn").apply {
                                     isDaemon = true
                                     start()
