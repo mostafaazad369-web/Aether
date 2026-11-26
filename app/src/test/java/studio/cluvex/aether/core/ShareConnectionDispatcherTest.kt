@@ -268,4 +268,45 @@ class ShareConnectionDispatcherTest {
         assertEquals(true, started)
         assertEquals(0, releases.get())
     }
+
+    @Test
+    fun rejectedAdmissionDoesNotAcquireOrReleaseAnyCounter() {
+        val live = AtomicInteger(1)
+        val releases = AtomicInteger(0)
+        val admitted = ShareConnectionCapacity.tryAcquire(live, limit = 1)
+
+        if (admitted) {
+            ShareConnectionRelease { live.decrementAndGet(); releases.incrementAndGet() }.release()
+        }
+
+        assertEquals(false, admitted)
+        assertEquals(1, live.get())
+        assertEquals(0, releases.get())
+    }
+
+    @Test
+    fun teardownSocketCloseBeforeHandlerFinallyStillReleasesAdmissionOnce() {
+        val clientSocket = java.net.Socket()
+        val owner = ShareBridge.ActiveClient(clientSocket, viaAddress = null)
+        val live = AtomicInteger(1)
+        val releases = AtomicInteger(0)
+        val admission = ShareConnectionRelease {
+            live.decrementAndGet()
+            releases.incrementAndGet()
+        }
+
+        // closeAllLocked/closeLanLocked may close the socket before the handler unwinds.
+        owner.close()
+        owner.close()
+        assertEquals(true, clientSocket.isClosed)
+        assertEquals(1, live.get())
+
+        // The handler's finally remains responsible for accounting, exactly once.
+        admission.release()
+        admission.release()
+
+        assertEquals(0, live.get())
+        assertEquals(1, releases.get())
+    }
+
 }
