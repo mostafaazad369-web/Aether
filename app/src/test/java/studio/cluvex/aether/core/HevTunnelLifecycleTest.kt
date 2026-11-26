@@ -1,6 +1,9 @@
 package studio.cluvex.aether.core
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +66,7 @@ class HevTunnelLifecycleTest {
     fun startRechecksWorkerStateAfterAcquiringLifecycleLock() {
         val active = AtomicBoolean(false)
         val observedIdle = CountDownLatch(1)
+        val pollObservedIdle = CountDownLatch(1)
         val releaseLock = CountDownLatch(1)
         val startCalled = CountDownLatch(1)
         val lifecycleLock = Any()
@@ -82,7 +86,11 @@ class HevTunnelLifecycleTest {
                     startAfterNativeWorkerStopped(
                         timeoutMs = 1_000,
                         lifecycleLock = lifecycleLock,
-                        isActive = { active.get() },
+                        isActive = {
+                            val value = active.get()
+                            if (!value) pollObservedIdle.countDown()
+                            value
+                        },
                         start = { startCalled.countDown() },
                     )
                 },
@@ -90,12 +98,11 @@ class HevTunnelLifecycleTest {
         }
         starter.start()
         // The poller observes idle, then blocks behind lockHolder.
-        Thread.sleep(40)
+        assertTrue(pollObservedIdle.await(1, TimeUnit.SECONDS))
         active.set(true)
         releaseLock.countDown()
         // The in-lock recheck must reject this start while the old worker drains.
-        Thread.sleep(40)
-        assertEquals(1L, startCalled.count)
+        assertFalse(startCalled.await(80, TimeUnit.MILLISECONDS))
         active.set(false)
         assertTrue(startCalled.await(1, TimeUnit.SECONDS))
         starter.join(1_000)
