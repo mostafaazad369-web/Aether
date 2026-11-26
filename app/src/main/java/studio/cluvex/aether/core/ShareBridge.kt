@@ -680,8 +680,22 @@ object ShareBridge {
             val socks = bindWithRetry("SOCKS5 $label", host, SOCKS_SHARE_PORT, attempts = 4)
             val http = if (socks != null) bindWithRetry("HTTP $label", host, HTTP_SHARE_PORT, attempts = 4) else null
             if (socks == null || http == null) {
-                runCatching { socks?.close() }
-                runCatching { http?.close() }
+                val partialBindClosed = closeOwnedResourcesResult(
+                    "Partial LAN listener bind cleanup failed",
+                    listOf({ socks?.close() }, { http?.close() }),
+                )
+                if (!partialBindClosed) {
+                    closeFailureLatched = true
+                    lanTargets = emptyList()
+                    _lanEndpoint.value = null
+                    _lanEndpoints.value = emptyList()
+                    _lanStatus.value = LanStatus.PORT_BUSY
+                    DiagnosticsLog.e(
+                        TAG,
+                        "Partial LAN bind cleanup failed; replacement binds are disabled for this process",
+                    )
+                    return
+                }
                 busy++
                 continue
             }
