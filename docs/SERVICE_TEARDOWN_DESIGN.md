@@ -513,3 +513,11 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - `ensureLanLocked()` retains only listeners whose bound address is still present and healthy, then retains LAN `ActiveClient` owners only while their `viaAddress` remains among the current share targets. Registry removal closes the owner (including its client/upstream/datagram sockets); socket closure is expected to unblock the handler, whose `finally` invokes the shared idempotent admission release.
 - Added JVM tests for interface-removal-style registry eviction followed by handler-finally cleanup, and for interface removal winning before the final dispatch handoff. They assert owner close, global/LAN release, and worker-start behavior.
 - These tests exercise the registry, handoff and release primitives with simulated interface membership. They do not instantiate Android network callbacks or validate actual kernel interface disappearance, socket-unblock timing, or full ShareBridge counter flows. No Build or test execution is claimed.
+
+
+### ShareBridge counters across listener-session restart (2026-11-26)
+
+- `liveConnections` and `liveLanClients` are process-wide active-handler counters, not counters owned by one listener generation. Closing old-session sockets does not guarantee their handler `finally` blocks have run before a new session starts.
+- Removed the new-session reset of `_lanClients.value`. The observable LAN count now remains aligned with the process-wide `liveLanClients` counter while old handlers unwind; a delayed old-session release decrements the shared count and publishes the current total, including any new-session LAN admissions.
+- Added a JVM test modelling an old-session delayed release after a new-session LAN admission and asserting that the new admission remains counted.
+- This covers the counter/release primitive contract, not a full concurrent ShareBridge stop/start with real sockets. No Build or test execution is claimed.
