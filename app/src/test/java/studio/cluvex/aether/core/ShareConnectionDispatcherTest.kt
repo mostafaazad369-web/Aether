@@ -1,5 +1,6 @@
 package studio.cluvex.aether.core
 
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -42,6 +43,35 @@ class ShareConnectionDispatcherTest {
 
         assertSame(dispatchFailure, caught)
         assertEquals(listOf(cleanupFailure), dispatchFailure.suppressed.toList())
+    }
+
+    @Test
+    fun workerFinallyAndDispatchRollbackReleaseAdmissionOnlyOnce() {
+        val releases = AtomicInteger(0)
+        val admission = ShareConnectionRelease { releases.incrementAndGet() }
+        val ready = CountDownLatch(2)
+        val go = CountDownLatch(1)
+        val workerFinally = Thread {
+            ready.countDown()
+            go.await()
+            admission.release()
+        }
+        val dispatchRollback = Thread {
+            ready.countDown()
+            go.await()
+            admission.release()
+        }
+
+        workerFinally.start()
+        dispatchRollback.start()
+        ready.await()
+        go.countDown()
+        workerFinally.join(1_000)
+        dispatchRollback.join(1_000)
+
+        assertEquals(false, workerFinally.isAlive)
+        assertEquals(false, dispatchRollback.isAlive)
+        assertEquals(1, releases.get())
     }
 
     @Test
