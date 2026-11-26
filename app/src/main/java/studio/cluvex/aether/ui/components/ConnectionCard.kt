@@ -501,7 +501,7 @@ private fun SpeedStrip(connectedSince: Long?, connected: Boolean, onClick: ((Tra
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable { onClick(stats) } else Modifier)
+            .then(if (onClick != null) Modifier.clickable { onClick?.invoke(stats) } else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -695,7 +695,7 @@ private fun MetaSlide(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable { onClick?.invoke() } else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 14.dp, vertical = 9.dp),
