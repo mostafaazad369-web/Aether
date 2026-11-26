@@ -97,15 +97,19 @@ class ShareListenerRegistryTest {
         val listener = FakeListener("once")
         registry.add(listener)
         val batch = registry.detachAll()
+        val secondStarted = CountDownLatch(1)
         val firstResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
         val secondResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
         val first = Thread { firstResult.set(batch.close()) }
-        val second = Thread { secondResult.set(batch.close()) }
+        val second = Thread {
+            secondStarted.countDown()
+            secondResult.set(batch.close())
+        }
 
         first.start()
         assertTrue(closeEntered.await(1, TimeUnit.SECONDS))
         second.start()
-        Thread.sleep(30)
+        assertTrue(secondStarted.await(1, TimeUnit.SECONDS))
         assertEquals(null, secondResult.get())
         allowCloseToFinish.countDown()
         first.join(1_000)
