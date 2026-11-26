@@ -484,3 +484,10 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 
 - The accepted connection handler Thread is now constructed separately and started inside a guarded dispatch block. If `Thread.start()` throws, cleanup removes the registered `ActiveClient` ownership (which closes the socket), decrements the connection admission counter, decrements the LAN client counter when applicable, and rethrows the original failure. The ordinary worker `finally` remains the cleanup path once dispatch succeeds.
 - This is a code-path review and guard addition, not a runtime validation. The failure path has not been exercised by a JVM test and Android thread-start failure semantics were not integration-tested; a deterministic dispatcher seam remains a worthwhile follow-up.
+
+
+### Deterministic ShareBridge connection dispatch rollback (2026-11-26)
+
+- Handler Thread construction and `start()` now both execute inside `ShareConnectionDispatcher.dispatch`. Any `Throwable` during either stage invokes the rollback callback synchronously: remove the registered client owner (closing its socket), release the global admission count, and release the LAN count when applicable. Successful dispatch does not invoke rollback; the running worker's `finally` remains the sole release path.
+- The dispatcher preserves the original construction/start failure if rollback itself fails, attaching the cleanup failure as suppressed. JVM tests cover failed dispatch with exactly-once rollback, cleanup failure preservation, and successful dispatch without rollback.
+- These tests exercise the extracted dispatch primitive, not the full ShareBridge Android accept/stop race or the real OS thread-start failure. No build or test execution is claimed.
