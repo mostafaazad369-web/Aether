@@ -173,8 +173,10 @@ object ShareBridge {
     /** r6: the SOCKS5 + HTTP listener pair bound on one share interface. */
     private class LanListener(val target: LanTarget, val socks: ServerSocket, val http: ServerSocket) {
         fun close() {
-            runCatching { socks.close() }
-            runCatching { http.close() }
+            closeOwnedResources(
+                "LAN listener close failed",
+                listOf({ socks.close() }, { http.close() }),
+            )
         }
     }
 
@@ -188,10 +190,30 @@ object ShareBridge {
 
         fun close() {
             if (!closed.compareAndSet(false, true)) return
-            upstreams.toList().forEach { runCatching { it.close() } }
-            datagrams.toList().forEach { runCatching { it.close() } }
-            runCatching { socket.close() }
+            val closeActions = buildList<() -> Unit> {
+                upstreams.toList().forEach { upstream -> add { upstream.close() } }
+                datagrams.toList().forEach { datagram -> add { datagram.close() } }
+                add { socket.close() }
+            }
+            closeOwnedResources("Active client close failed", closeActions)
         }
+    }
+
+    /**
+     * Attempt every close even after one fails, then surface an aggregate failure.
+     * Lifecycle teardown consumes that failure to prevent rebinding a fixed endpoint
+     * whose previous owner may still be alive.
+     */
+    private fun closeOwnedResources(message: String, closeActions: List<() -> Unit>) {
+        var failure: Throwable? = null
+        closeActions.forEach { close ->
+            try {
+                close()
+            } catch (error: Throwable) {
+                if (failure == null) failure = error else failure?.addSuppressed(error)
+            }
+        }
+        failure?.let { throw IllegalStateException(message, it) }
     }
 
     private val _active = MutableStateFlow(false)

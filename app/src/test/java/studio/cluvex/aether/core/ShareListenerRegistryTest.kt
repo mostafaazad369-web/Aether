@@ -222,6 +222,47 @@ class ShareListenerRegistryTest {
     }
 
     @Test
+    fun activeClientCloseSurfacesFailureAfterAttemptingEveryOwnedSocket() {
+        class FailingSocket : Socket() {
+            var closeAttempts = 0
+            override fun close() {
+                closeAttempts++
+                throw java.io.IOException("simulated close failure")
+            }
+        }
+        class TrackingSocket : Socket() {
+            var closeAttempts = 0
+            override fun close() {
+                closeAttempts++
+            }
+        }
+
+        val client = FailingSocket()
+        val upstream = TrackingSocket()
+        val owner = ShareBridge.ActiveClient(client, viaAddress = null)
+        owner.upstreams.add(upstream)
+
+        var failed = false
+        try {
+            owner.close()
+        } catch (_: IllegalStateException) {
+            failed = true
+        }
+
+        assertTrue("close failure must be visible to the teardown batch", failed)
+        assertEquals(1, upstream.closeAttempts)
+        assertEquals(1, client.closeAttempts)
+        // Ownership close is exactly-once even when a close callback fails.
+        try {
+            owner.close()
+        } catch (_: IllegalStateException) {
+            throw AssertionError("a completed close attempt must not be repeated")
+        }
+        assertEquals(1, upstream.closeAttempts)
+        assertEquals(1, client.closeAttempts)
+    }
+
+    @Test
     fun closingClientOwnershipClosesRegisteredUdpEndpoints() {
         class TrackingDatagramSocket : DatagramSocket() {
             var closes = 0
