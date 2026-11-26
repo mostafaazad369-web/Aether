@@ -1,26 +1,34 @@
 package studio.cluvex.aether.core
 
-import java.util.concurrent.atomic.AtomicBoolean
-
 /**
  * A detached group of resources whose close operation is synchronous and idempotent.
+ * Concurrent callers serialize on this batch: a later caller cannot return while the
+ * first close is still running. The result is false if any close callback fails.
  *
- * The owner detaches the resources while holding its state lock, then calls [close]
- * only after releasing that lock. A caller that must rebind a fixed endpoint must
- * wait for this method to return before starting the replacement bind.
+ * The owner detaches resources while holding its state lock, then calls [close] only
+ * after releasing that lock. A caller must not rebind a fixed endpoint unless close
+ * returns true.
  */
 internal class ShareCloseBatch<T>(
     private val entries: List<T>,
     private val closeEntry: (T) -> Unit,
 ) {
-    private val closed = AtomicBoolean(false)
+    private var closed = false
+    private var closeSucceeded = false
 
     val size: Int
         get() = entries.size
 
-    fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        entries.forEach { entry -> runCatching { closeEntry(entry) } }
+    @Synchronized
+    fun close(): Boolean {
+        if (closed) return closeSucceeded
+        closed = true
+        var succeeded = true
+        entries.forEach { entry ->
+            if (runCatching { closeEntry(entry) }.isFailure) succeeded = false
+        }
+        closeSucceeded = succeeded
+        return closeSucceeded
     }
 }
 
