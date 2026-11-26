@@ -591,3 +591,61 @@ The listener registry now exposes `detachWhere()` and `detachAll()`, which remov
 The existing `retain()` and `closeAll()` methods remain compatibility operations and still close synchronously at the call site. Existing `ShareBridge` production call sites have not yet been migrated to detach/close/revalidate phases. Consequently this helper does not yet remove the monitor-held close risk documented above, and it is not evidence that stop/start or LAN replacement ordering has been fixed.
 
 JVM tests were added for non-closing detach, exactly-once batch close, synchronous close completion before replacement work, concurrent duplicate close waiting, and close-failure reporting. These tests have been authored but not executed in the current environment.
+
+### Lifecycle serialization requirement for detached teardown (2026-11-26)
+
+The detached close batch is only the resource-completion primitive. It does not serialize
+the larger lifecycle transition. The production migration must introduce a lifecycle
+serialization boundary that is distinct from the `ShareBridge` state monitor.
+
+Required lock/order contract:
+
+1. Acquire the lifecycle boundary before beginning any operation that can detach or bind
+   fixed share endpoints. This includes start, stop, LAN enable/disable, watcher
+   reconciliation, mode changes and engine-route changes.
+2. Under the `ShareBridge` monitor, validate command/session/config generations, publish
+   the invalidated state, detach the affected listener and client owners, and clear the
+   corresponding published endpoint state. Do not close any socket in this section.
+3. Release the `ShareBridge` monitor while retaining lifecycle serialization. Close all
+   detached batches synchronously. Every close result must be observed; a failed close
+   leaves that endpoint generation fail-closed and must not be followed by a bind on the
+   conflicting fixed endpoint.
+4. Re-enter the `ShareBridge` monitor and revalidate every generation and intent that
+   authorized the operation. A stale operation exits without binding or publishing
+   readiness. A current operation may bind and publish its new listener generation.
+5. Release lifecycle serialization only after the transition has either completed or
+   failed closed. No competing lifecycle operation may bind the same fixed endpoint
+   between detach and completion of the corresponding close batch.
+
+The lifecycle boundary must never be acquired by connection-handler callbacks that
+already hold the `ShareBridge` monitor. Handler release continues to use the existing
+monitor-only ownership removal and exactly-once counter release path. This avoids
+introducing a monitor/lifecycle lock inversion.
+
+Resource classes that must participate in detach/close/revalidate:
+
+- loopback SOCKS and HTTP `ServerSocket` instances;
+- every LAN listener pair removed by interface reconciliation or LAN disable;
+- active client owners removed by full teardown or LAN/interface teardown, including
+  their upstream TCP and UDP datagram sockets.
+
+The implementation must preserve the existing accounting invariant: detaching or closing
+an `ActiveClient` does not decrement `liveConnections` or `liveLanClients`. The handler
+finally path or dispatch rollback remains the sole exactly-once release owner.
+
+Migration is incomplete until all production close paths use this protocol. In particular,
+`ensureLanLocked()` cannot remain a monitor-held method that both evicts listeners and
+binds replacements. It must become an orchestrated reconciliation operation whose
+detach/close phase completes before any replacement bind. The watcher must invoke that
+operation without holding the state monitor across the close phase.
+
+Deterministic tests must hold a close callback behind a latch and prove all of the
+following: (a) a competing start/reconcile cannot bind while close is blocked; (b) a
+newer command invalidates an older operation before its revalidation, preventing stale
+bind; (c) close failure prevents replacement bind; (d) LAN-only detach preserves
+loopback owners; and (e) full teardown preserves counter release ownership until handler
+finally or dispatch rollback. These tests must exercise the orchestration primitive used
+by production, not only isolated registry and close-batch helpers.
+
+No production callsite is claimed migrated by this design note. Build and test execution
+remain unverified.
