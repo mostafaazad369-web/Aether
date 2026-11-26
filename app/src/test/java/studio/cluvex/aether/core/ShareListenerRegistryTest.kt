@@ -5,6 +5,8 @@ import java.net.Socket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class ShareListenerRegistryTest {
     private class FakeListener(val name: String) {
@@ -44,6 +46,72 @@ class ShareListenerRegistryTest {
         assertTrue(registry.isEmpty())
         assertEquals(1, first.closeCount)
         assertEquals(1, second.closeCount)
+    }
+
+    @Test
+    fun detachWhereTransfersOwnershipWithoutClosingUntilBatchRuns() {
+        val registry = ShareListenerRegistry<FakeListener> { it.close() }
+        val keep = FakeListener("keep")
+        val detached = FakeListener("detached")
+        registry.add(keep)
+        registry.add(detached)
+
+        val batch = registry.detachWhere { it.name == "keep" }
+
+        assertEquals(listOf(keep), registry.snapshot())
+        assertEquals(1, batch.size)
+        assertEquals(0, detached.closeCount)
+        batch.close()
+        assertEquals(1, detached.closeCount)
+    }
+
+    @Test
+    fun detachedBatchClosesEachEntryExactlyOnceWhenCloseIsRepeated() {
+        val registry = ShareListenerRegistry<FakeListener> { it.close() }
+        val first = FakeListener("first")
+        val second = FakeListener("second")
+        registry.add(first)
+        registry.add(second)
+
+        val batch = registry.detachAll()
+        assertTrue(registry.isEmpty())
+        assertEquals(0, first.closeCount)
+        assertEquals(0, second.closeCount)
+
+        batch.close()
+        batch.close()
+
+        assertEquals(1, first.closeCount)
+        assertEquals(1, second.closeCount)
+    }
+
+    @Test
+    fun replacementWorkCannotPassSynchronousCloseBatchBarrierEarly() {
+        val closeEntered = CountDownLatch(1)
+        val allowCloseToFinish = CountDownLatch(1)
+        val registry = ShareListenerRegistry<FakeListener> {
+            closeEntered.countDown()
+            check(allowCloseToFinish.await(1, TimeUnit.SECONDS))
+            it.close()
+        }
+        val oldListener = FakeListener("old")
+        registry.add(oldListener)
+        val batch = registry.detachAll()
+        val replacementStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val worker = Thread {
+            batch.close()
+            replacementStarted.set(true)
+        }
+
+        worker.start()
+        assertTrue(closeEntered.await(1, TimeUnit.SECONDS))
+        assertEquals(false, replacementStarted.get())
+        allowCloseToFinish.countDown()
+        worker.join(1_000)
+
+        assertEquals(false, worker.isAlive)
+        assertEquals(true, replacementStarted.get())
+        assertEquals(1, oldListener.closeCount)
     }
 
     @Test
