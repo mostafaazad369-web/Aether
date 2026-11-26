@@ -282,7 +282,7 @@
     <string name="blocked_apps_desc">اپ‌های مسدودشده هنگام روشن بودن ⁨VPN⁩ هیچ دسترسی به اینترنت ندارند. پل فیلتر داخلی فعال می‌شود.</string>
     <!-- 1.2.4 -->
     <string name="meta_protocol">پروتکل</string>
-    <string name="meta_latency">تأخیر · برای جزئیات لمس کنید</string>
+    <string name="meta_latency">تأخیر</string>
     <string name="ping_details_title">کیفیت اتصال</string>
     <string name="ping_details_samples">تعداد نمونه‌ها</string>
     <string name="ping_details_answered">پاسخ‌داده‌شده</string>
