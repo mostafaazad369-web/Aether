@@ -491,3 +491,10 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Handler Thread construction and `start()` now both execute inside `ShareConnectionDispatcher.dispatch`. Any `Throwable` during either stage invokes the rollback callback synchronously: remove the registered client owner (closing its socket), release the global admission count, and release the LAN count when applicable. Successful dispatch does not invoke rollback; the running worker's `finally` remains the sole release path.
 - The dispatcher preserves the original construction/start failure if rollback itself fails, attaching the cleanup failure as suppressed. JVM tests cover failed dispatch with exactly-once rollback, cleanup failure preservation, and successful dispatch without rollback.
 - These tests exercise the extracted dispatch primitive, not the full ShareBridge Android accept/stop race or the real OS thread-start failure. No build or test execution is claimed.
+
+
+### ShareBridge stop-versus-dispatch handoff and idempotent admission release (2026-11-26)
+
+- The post-accept handoff now rechecks listener `session`, bridge active state, LAN intent, and client ownership while holding the ShareBridge monitor. Thread start occurs inside that same critical section. Therefore teardown either wins first and prevents a stale handler from being invoked, or dispatch wins first and teardown subsequently sees the registered owner and closes its socket.
+- Worker `finally` and dispatch rollback share one `ShareConnectionRelease`, guarded by an atomic compare-and-set. This makes connection and LAN counter release idempotent even if cleanup paths race. The dispatcher still invokes rollback for Thread construction/start failure and for a rejected stale-generation handoff.
+- Added a JVM concurrency test racing worker-finally release against dispatch rollback and asserting the resource release callback executes once. The test covers the extracted release primitive; it does not instantiate the Android ShareBridge or prove every accept/stop interleaving. No Build or test execution is claimed.
