@@ -582,3 +582,12 @@ Required JVM coverage before considering the production refactor complete:
 - Teardown close racing handler-finally preserves exactly-once counter release and does not publish a stale LAN count.
 
 No production synchronization refactor is made in this commit. The required change spans all the monitor-held entry points above; a partial conversion of only `closeLanLocked()` or `closeAllLocked()` would either still close under the monitor or permit fixed-port bind races. The current code remains subject to the documented monitor hold-time risk. Build and JVM tests remain unexecuted.
+
+
+### Detached close-batch primitive (preparatory; not yet wired into ShareBridge)
+
+The listener registry now exposes `detachWhere()` and `detachAll()`, which remove ownership under the caller's lock and return a `ShareCloseBatch` without closing resources. `ShareCloseBatch.close()` is synchronous, serializes concurrent duplicate callers so none can return while the first close is still running, attempts every entry, and returns false if any close callback failed. A caller that intends to bind a conflicting fixed endpoint must proceed only after the batch returns true; a failed close must fail closed rather than assume the port was released.
+
+The existing `retain()` and `closeAll()` methods remain compatibility operations and still close synchronously at the call site. Existing `ShareBridge` production call sites have not yet been migrated to detach/close/revalidate phases. Consequently this helper does not yet remove the monitor-held close risk documented above, and it is not evidence that stop/start or LAN replacement ordering has been fixed.
+
+JVM tests were added for non-closing detach, exactly-once batch close, synchronous close completion before replacement work, concurrent duplicate close waiting, and close-failure reporting. These tests have been authored but not executed in the current environment.
