@@ -906,19 +906,19 @@ object ShareBridge {
                         runCatching { client.close() }
                     }
                 }, "$name-conn").apply { isDaemon = true }
-                try {
-                    connectionWorker.start()
-                } catch (startFailure: Throwable) {
-                    // Admission already reserved capacity and registered ownership.
-                    // If dispatch fails, release both synchronously before propagating.
-                    synchronized(this) {
-                        activeClients.retain { it.socket !== client }
-                    }
-                    liveConnections.decrementAndGet()
-                    if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
-                    runCatching { client.close() }
-                    throw startFailure
-                }
+                ShareConnectionDispatcher.dispatch(
+                    startWorker = { connectionWorker.start() },
+                    onFailure = {
+                        // Admission already reserved capacity and registered ownership.
+                        // If dispatch fails, release both synchronously before propagating.
+                        synchronized(this) {
+                            activeClients.retain { it.socket !== client }
+                        }
+                        liveConnections.decrementAndGet()
+                        if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
+                        runCatching { client.close() }
+                    },
+                )
             }
         }
     }
