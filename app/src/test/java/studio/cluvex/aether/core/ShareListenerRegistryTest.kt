@@ -61,7 +61,7 @@ class ShareListenerRegistryTest {
         assertEquals(listOf(keep), registry.snapshot())
         assertEquals(1, batch.size)
         assertEquals(0, detached.closeCount)
-        batch.close()
+        assertEquals(true, batch.close())
         assertEquals(1, detached.closeCount)
     }
 
@@ -78,11 +78,59 @@ class ShareListenerRegistryTest {
         assertEquals(0, first.closeCount)
         assertEquals(0, second.closeCount)
 
-        batch.close()
-        batch.close()
+        assertEquals(true, batch.close())
+        assertEquals(true, batch.close())
 
         assertEquals(1, first.closeCount)
         assertEquals(1, second.closeCount)
+    }
+
+    @Test
+    fun concurrentDuplicateCloseWaitsForFirstCloseToComplete() {
+        val closeEntered = CountDownLatch(1)
+        val allowCloseToFinish = CountDownLatch(1)
+        val registry = ShareListenerRegistry<FakeListener> {
+            closeEntered.countDown()
+            check(allowCloseToFinish.await(1, TimeUnit.SECONDS))
+            it.close()
+        }
+        val listener = FakeListener("once")
+        registry.add(listener)
+        val batch = registry.detachAll()
+        val firstResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
+        val secondResult = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
+        val first = Thread { firstResult.set(batch.close()) }
+        val second = Thread { secondResult.set(batch.close()) }
+
+        first.start()
+        assertTrue(closeEntered.await(1, TimeUnit.SECONDS))
+        second.start()
+        Thread.sleep(30)
+        assertEquals(null, secondResult.get())
+        allowCloseToFinish.countDown()
+        first.join(1_000)
+        second.join(1_000)
+
+        assertEquals(false, first.isAlive)
+        assertEquals(false, second.isAlive)
+        assertEquals(true, firstResult.get())
+        assertEquals(true, secondResult.get())
+        assertEquals(1, listener.closeCount)
+    }
+
+    @Test
+    fun closeBatchReportsFailureAndDoesNotRetryFailedCallback() {
+        val attempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val registry = ShareListenerRegistry<FakeListener> {
+            attempts.incrementAndGet()
+            error("simulated close failure")
+        }
+        registry.add(FakeListener("broken"))
+        val batch = registry.detachAll()
+
+        assertEquals(false, batch.close())
+        assertEquals(false, batch.close())
+        assertEquals(1, attempts.get())
     }
 
     @Test
