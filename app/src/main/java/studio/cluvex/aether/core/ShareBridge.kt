@@ -891,6 +891,14 @@ object ShareBridge {
                     continue
                 }
 
+                val admissionRelease = ShareConnectionRelease {
+                    synchronized(this) {
+                        activeClients.retain { it.socket !== client }
+                    }
+                    liveConnections.decrementAndGet()
+                    if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
+                    runCatching { client.close() }
+                }
                 ShareConnectionDispatcher.dispatch(
                     startWorker = {
                         Thread({
@@ -900,12 +908,7 @@ object ShareBridge {
                             } catch (_: Exception) {
                                 // Per-connection errors are non-fatal by design.
                             } finally {
-                                synchronized(this) {
-                                    activeClients.retain { it.socket !== client }
-                                }
-                                liveConnections.decrementAndGet()
-                                if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
-                                runCatching { client.close() }
+                                admissionRelease.release()
                             }
                         }, "$name-conn").apply {
                             isDaemon = true
@@ -913,14 +916,8 @@ object ShareBridge {
                         }
                     },
                     onFailure = {
-                        // Admission already reserved capacity and registered ownership.
-                        // If dispatch fails, release both synchronously before propagating.
-                        synchronized(this) {
-                            activeClients.retain { it.socket !== client }
-                        }
-                        liveConnections.decrementAndGet()
-                        if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
-                        runCatching { client.close() }
+                        // Share the same idempotent release with worker-finally.
+                        admissionRelease.release()
                     },
                 )
             }
