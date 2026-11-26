@@ -471,7 +471,7 @@ private fun copyToClipboard(context: Context, text: String) {
 // --------------------------------------------------------------- 4. speeds
 
 @Composable
-private fun SpeedStrip(connectedSince: Long?, connected: Boolean) {
+private fun SpeedStrip(connectedSince: Long?, connected: Boolean, onClick: (() -> Unit)? = null) {
     val stats = rememberTrafficStats(connectedSince = connectedSince, connected = connected)
 
     Row(
