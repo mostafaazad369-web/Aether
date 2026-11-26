@@ -498,3 +498,11 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - The post-accept handoff now rechecks listener `session`, bridge active state, LAN intent, and client ownership while holding the ShareBridge monitor. Thread start occurs inside that same critical section. Therefore teardown either wins first and prevents a stale handler from being invoked, or dispatch wins first and teardown subsequently sees the registered owner and closes its socket.
 - Worker `finally` and dispatch rollback share one `ShareConnectionRelease`, guarded by an atomic compare-and-set. This makes connection and LAN counter release idempotent even if cleanup paths race. The dispatcher still invokes rollback for Thread construction/start failure and for a rejected stale-generation handoff.
 - Added a JVM concurrency test racing worker-finally release against dispatch rollback and asserting the resource release callback executes once. The test covers the extracted release primitive; it does not instantiate the Android ShareBridge or prove every accept/stop interleaving. No Build or test execution is claimed.
+
+
+### Deterministic ShareBridge handoff ordering tests (2026-11-26)
+
+- Extracted the monitor-protected final handoff into `ShareConnectionHandoff.startIfCurrent`, retaining the production lock, current-generation predicate, and worker-start operation as one serialized critical section.
+- Added JVM tests for both legal orderings: teardown invalidates the generation before handoff (worker must not start), and dispatch enters the critical section first (teardown cannot invalidate until the handoff exits).
+- These tests exercise the synchronization primitive and its ordering contract, not a real Android `NetworkCallback`, `ServerSocket`, or interface churn. Existing `ensureLanLocked` closes LAN clients whose bound interface address disappears; their admission release remains tied to handler-finally/dispatch rollback and is idempotent.
+- No Build or test execution is claimed.
