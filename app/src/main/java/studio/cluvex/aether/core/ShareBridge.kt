@@ -901,16 +901,16 @@ object ShareBridge {
                 }
                 ShareConnectionDispatcher.dispatch(
                     startWorker = {
-                        synchronized(this) {
-                            // Serialize the handoff with stop/teardown. If teardown
-                            // won after accept registration, do not invoke a stale handler.
-                            check(
+                        ShareConnectionHandoff.startIfCurrent(
+                            lock = this,
+                            isCurrent = {
                                 session == listenerSession &&
                                     _active.value &&
                                     (via == null || lanRequested) &&
                                     activeClients.any { it.socket === client }
-                            ) { "Connection listener generation stopped before dispatch." }
-                            Thread({
+                            },
+                            startWorker = {
+                                Thread({
                                 try {
                                     client.tcpNoDelay = true
                                     handler(client)
@@ -919,11 +919,12 @@ object ShareBridge {
                                 } finally {
                                     admissionRelease.release()
                                 }
-                            }, "$name-conn").apply {
-                                isDaemon = true
-                                start()
-                            }
-                        }
+                                }, "$name-conn").apply {
+                                    isDaemon = true
+                                    start()
+                                }
+                            },
+                        )
                     },
                     onFailure = {
                         // Share the same idempotent release with worker-finally.
