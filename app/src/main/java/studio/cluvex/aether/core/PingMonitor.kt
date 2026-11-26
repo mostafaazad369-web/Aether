@@ -71,4 +71,6 @@ object PingMonitor {
             }
         } finally { mutex.unlock() }
     }
+
+    private const val MAX_HISTORY = 60
 }
