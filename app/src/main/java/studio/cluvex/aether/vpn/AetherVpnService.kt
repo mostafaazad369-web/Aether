@@ -38,6 +38,7 @@ import studio.cluvex.aether.core.PortProbe
 import studio.cluvex.aether.core.TorBootstrap
 import studio.cluvex.aether.core.ProfileCodec
 import studio.cluvex.aether.core.HevTunnel
+import studio.cluvex.aether.core.startAfterNativeWorkerStopped
 import studio.cluvex.aether.core.RoutingEngine
 import studio.cluvex.aether.core.ShareBridge
 import studio.cluvex.aether.core.SmartAuto
