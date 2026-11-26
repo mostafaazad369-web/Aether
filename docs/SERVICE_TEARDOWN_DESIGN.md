@@ -506,3 +506,10 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Added JVM tests for both legal orderings: teardown invalidates the generation before handoff (worker must not start), and dispatch enters the critical section first (teardown cannot invalidate until the handoff exits).
 - These tests exercise the synchronization primitive and its ordering contract, not a real Android `NetworkCallback`, `ServerSocket`, or interface churn. Existing `ensureLanLocked` closes LAN clients whose bound interface address disappears; their admission release remains tied to handler-finally/dispatch rollback and is idempotent.
 - No Build or test execution is claimed.
+
+
+### LAN interface removal and admitted-client cleanup (2026-11-26)
+
+- `ensureLanLocked()` retains only listeners whose bound address is still present and healthy, then retains LAN `ActiveClient` owners only while their `viaAddress` remains among the current share targets. Registry removal closes the owner (including its client/upstream/datagram sockets); socket closure is expected to unblock the handler, whose `finally` invokes the shared idempotent admission release.
+- Added JVM tests for interface-removal-style registry eviction followed by handler-finally cleanup, and for interface removal winning before the final dispatch handoff. They assert owner close, global/LAN release, and worker-start behavior.
+- These tests exercise the registry, handoff and release primitives with simulated interface membership. They do not instantiate Android network callbacks or validate actual kernel interface disappearance, socket-unblock timing, or full ShareBridge counter flows. No Build or test execution is claimed.
