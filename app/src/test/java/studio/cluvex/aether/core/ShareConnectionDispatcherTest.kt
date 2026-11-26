@@ -136,6 +136,65 @@ class ShareConnectionDispatcherTest {
     }
 
     @Test
+    fun removedLanInterfaceClosesOwnerAndHandlerFinallyReleasesAdmissionOnce() {
+        val lock = Any()
+        val lanAddress = "192.0.2.10"
+        val owner = Any()
+        val closeCount = AtomicInteger(0)
+        val globalReleases = AtomicInteger(0)
+        val lanReleases = AtomicInteger(0)
+        val registry = ShareListenerRegistry<Any> { closeCount.incrementAndGet() }
+        registry.add(owner)
+        val admission = ShareConnectionRelease {
+            globalReleases.incrementAndGet()
+            lanReleases.incrementAndGet()
+        }
+
+        synchronized(lock) {
+            registry.retain { _ -> lanAddress == "192.0.2.11" }
+        }
+        // Interface removal closes the registered owner. The handler may still
+        // unwind and invoke its normal finally path afterwards.
+        admission.release()
+        admission.release()
+
+        assertEquals(true, registry.isEmpty())
+        assertEquals(1, closeCount.get())
+        assertEquals(1, globalReleases.get())
+        assertEquals(1, lanReleases.get())
+    }
+
+    @Test
+    fun lanInterfaceRemovalBeforeDispatchRejectsHandoffAndReleasesOnce() {
+        val lock = Any()
+        val owner = Any()
+        val registry = ShareListenerRegistry<Any> { }
+        registry.add(owner)
+        var interfacePresent = true
+        val started = AtomicInteger(0)
+        val releases = AtomicInteger(0)
+        val admission = ShareConnectionRelease { releases.incrementAndGet() }
+
+        synchronized(lock) {
+            interfacePresent = false
+            registry.retain { interfacePresent }
+        }
+        try {
+            ShareConnectionHandoff.startIfCurrent(
+                lock = lock,
+                isCurrent = { interfacePresent && registry.any { it === owner } },
+                startWorker = { started.incrementAndGet() },
+            )
+        } catch (_: IllegalStateException) {
+            admission.release()
+        }
+
+        assertEquals(0, started.get())
+        assertEquals(1, releases.get())
+        assertEquals(true, registry.isEmpty())
+    }
+
+    @Test
     fun successfulDispatchDoesNotRunRollback() {
         val releases = AtomicInteger(0)
         var started = false
