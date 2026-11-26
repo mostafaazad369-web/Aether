@@ -201,10 +201,15 @@ object ShareBridge {
 
     /**
      * Attempt every close even after one fails, then surface an aggregate failure.
-     * Lifecycle teardown consumes that failure to prevent rebinding a fixed endpoint
-     * whose previous owner may still be alive.
+     * Callers must propagate this failure and refuse fixed-endpoint replacement.
      */
     private fun closeOwnedResources(message: String, closeActions: List<() -> Unit>) {
+        if (!closeOwnedResourcesResult(message, closeActions)) {
+            throw IllegalStateException(message)
+        }
+    }
+
+    private fun closeOwnedResourcesResult(message: String, closeActions: List<() -> Unit>): Boolean {
         var failure: Throwable? = null
         closeActions.forEach { close ->
             try {
@@ -213,7 +218,11 @@ object ShareBridge {
                 if (failure == null) failure = error else failure?.addSuppressed(error)
             }
         }
-        failure?.let { throw IllegalStateException(message, it) }
+        failure?.let {
+            DiagnosticsLog.e(TAG, "$message: $it")
+            return false
+        }
+        return true
     }
 
     private val _active = MutableStateFlow(false)
@@ -322,6 +331,9 @@ object ShareBridge {
     private var session = 0
     private var watcherSession = -1
 
+    /** Once an owned close fails, fixed-port replacement is forbidden for this process. */
+    private var closeFailureLatched = false
+
     /**
      * Orders public start/stop requests at API-entry time, before their worker
      * threads are scheduled. A queued start from an older generation must not
@@ -389,14 +401,19 @@ object ShareBridge {
                 ensureLanLocked()
                 startWatcherLocked()
             } else {
-                closeLanLocked()
+                val closed = closeLanLocked()
                 _lanStatus.value = LanStatus.OFF
+                return@synchronized closed
             }
-            return@synchronized true
+            return@synchronized !closeFailureLatched
         }
 
         session++
-        closeAllLocked()
+        if (!closeAllLocked() || closeFailureLatched) {
+            _active.value = false
+            _lanStatus.value = LanStatus.PORT_BUSY
+            return@synchronized false
+        }
         uploadBytesCounter.set(0L)
         downloadBytesCounter.set(0L)
         // liveLanClients is process-wide: old-session handlers may still be
@@ -607,6 +624,10 @@ object ShareBridge {
      * network. Caller holds the lock. Idempotent - the watcher calls it often.
      */
     private fun ensureLanLocked() {
+        if (closeFailureLatched) {
+            _lanStatus.value = LanStatus.PORT_BUSY
+            return
+        }
         if (!lanRequested) {
             closeLanLocked()
             _lanStatus.value = LanStatus.OFF
@@ -629,12 +650,23 @@ object ShareBridge {
         // dead, bind what is new, keep what still works (its clients stay up).
         var changed = false
         val previousListenerCount = lanListeners.snapshot().size
-        lanListeners.retain { listener ->
+        val obsoleteListeners = lanListeners.detachWhere { listener ->
             targets.any { it.address == listener.target.address } &&
                 !listener.socks.isClosed && !listener.http.isClosed
         }
-        activeClients.retain { client ->
+        val obsoleteClients = activeClients.detachWhere { client ->
             client.viaAddress == null || targets.any { it.address == client.viaAddress }
+        }
+        val listenersClosed = obsoleteListeners.close()
+        val clientsClosed = obsoleteClients.close()
+        if (!listenersClosed || !clientsClosed) {
+            closeFailureLatched = true
+            lanTargets = emptyList()
+            _lanEndpoint.value = null
+            _lanEndpoints.value = emptyList()
+            _lanStatus.value = LanStatus.PORT_BUSY
+            DiagnosticsLog.e(TAG, "LAN teardown failed; replacement binds are disabled for this process")
+            return
         }
         if (lanListeners.snapshot().size != previousListenerCount) changed = true
         if (_authRequired.value && _proxyPassword.value.isBlank()) {
@@ -855,23 +887,37 @@ object ShareBridge {
         )
     }
 
-    private fun closeLanLocked() {
-        lanListeners.closeAll()
-        activeClients.retain { it.viaAddress == null }
+    private fun closeLanLocked(): Boolean {
+        val listenersClosed = lanListeners.detachAll().close()
+        val lanClientsClosed = activeClients.detachWhere { it.viaAddress == null }.close()
         lanTargets = emptyList()
         _lanEndpoint.value = null
         _lanEndpoints.value = emptyList()
+        val succeeded = listenersClosed && lanClientsClosed
+        if (!succeeded) {
+            closeFailureLatched = true
+            DiagnosticsLog.e(TAG, "LAN resource close failed; replacement binds are disabled for this process")
+        }
+        return succeeded
     }
 
-    private fun closeAllLocked() {
-        closeLanLocked()
-        activeClients.closeAll()
-        runCatching { loSocks?.close() }
+    private fun closeAllLocked(): Boolean {
+        val lanClosed = closeLanLocked()
+        val clientsClosed = activeClients.detachAll().close()
+        val loopbackClosed = closeOwnedResourcesResult(
+            "Loopback listener close failed",
+            listOf({ loSocks?.close() }, { loHttp?.close() }),
+        )
         loSocks = null
-        runCatching { loHttp?.close() }
         loHttp = null
         _socksPort.value = null
         _httpPort.value = null
+        val succeeded = lanClosed && clientsClosed && loopbackClosed
+        if (!succeeded) {
+            closeFailureLatched = true
+            DiagnosticsLog.e(TAG, "Share teardown failed; fixed-port replacement is disabled for this process")
+        }
+        return succeeded
     }
 
     // ============================================================ admission
