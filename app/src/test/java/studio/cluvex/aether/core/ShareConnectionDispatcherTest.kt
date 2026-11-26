@@ -195,6 +195,31 @@ class ShareConnectionDispatcherTest {
     }
 
     @Test
+    fun delayedOldSessionReleasePreservesNewSessionLanAdmissionCount() {
+        val global = AtomicInteger(0)
+        val lan = AtomicInteger(0)
+        val publishedLanCount = AtomicInteger(0)
+
+        // Old session still has one accepted LAN handler unwinding.
+        global.incrementAndGet()
+        lan.incrementAndGet()
+        val oldSessionRelease = ShareConnectionRelease {
+            global.decrementAndGet()
+            publishedLanCount.set(lan.decrementAndGet().coerceAtLeast(0))
+        }
+
+        // A new session admits a LAN client before the old handler reaches finally.
+        global.incrementAndGet()
+        publishedLanCount.set(lan.incrementAndGet())
+
+        oldSessionRelease.release()
+
+        assertEquals(1, global.get())
+        assertEquals(1, lan.get())
+        assertEquals(1, publishedLanCount.get())
+    }
+
+    @Test
     fun successfulDispatchDoesNotRunRollback() {
         val releases = AtomicInteger(0)
         var started = false
