@@ -128,3 +128,36 @@ internal suspend fun awaitNativeWorkerStopped(
         true
     } ?: false
 }
+
+/**
+ * Waits for the previous native worker to exit, then rechecks under the same
+ * lifecycle lock used by start/stop before invoking [start]. A stop can win
+ * after the polling loop observes inactivity but before this caller acquires
+ * the lock; the in-lock recheck closes that gap. The callback must perform the
+ * complete start publication while holding [lifecycleLock].
+ */
+internal suspend fun startAfterNativeWorkerStopped(
+    timeoutMs: Long = 10_000L,
+    lifecycleLock: Any,
+    isActive: () -> Boolean,
+    start: () -> Unit,
+): Boolean {
+    require(timeoutMs > 0L) { "timeoutMs must be positive" }
+    return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        var started = false
+        while (!started) {
+            while (isActive()) {
+                kotlinx.coroutines.delay(25L)
+            }
+            started = synchronized(lifecycleLock) {
+                if (isActive()) {
+                    false
+                } else {
+                    start()
+                    true
+                }
+            }
+        }
+        true
+    } ?: false
+}

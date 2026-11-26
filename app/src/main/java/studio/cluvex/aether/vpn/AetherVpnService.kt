@@ -2802,16 +2802,21 @@ class AetherVpnService : VpnService() {
      */
     private suspend fun startTun2Socks(profile: ConnectionProfile, socksPort: Int) {
         val context = currentCoroutineContext()
-        synchronized(nativeLifecycleLock) {
+        // cleanupNativeOnly() requests HEV stop asynchronously. Every path that
+        // starts a forwarder (including retry/ladder attempts) must wait for the
+        // old native pthread to exit. The helper rechecks under nativeLifecycleLock
+        // so a concurrent cleanup cannot slip a new stop request between the wait
+        // and this start.
+        val started = startAfterNativeWorkerStopped(
+            lifecycleLock = nativeLifecycleLock,
+            isActive = HevTunnel::isAlive,
+        ) {
             context.ensureActive()
             activeForwardPort = socksPort
             if (profile.blockedApps.isNotEmpty()) {
                 // PER-APP BLOCKING (1.2.4): hev-socks5-tunnel cannot filter per
-                // UID, so a userspace filter bridge (merged into Aether's
-                // SocksTunBridge) reads the TUN itself, resolves each flow's
-                // owning app and drops blocked apps' packets. It is activated
-                // ONLY when blocking is configured; the battle-tested hev path
-                // below stays the default for everyone else.
+                // UID, so a userspace filter bridge reads the TUN and drops
+                // blocked apps' packets. It must not overlap a draining HEV worker.
                 val pfd = tun ?: throw IllegalStateException("TUN descriptor is null")
                 val bridge = SocksTunBridge(
                     vpnService = this,
@@ -2822,9 +2827,8 @@ class AetherVpnService : VpnService() {
                     blockedPackagesProvider = { profile.blockedApps.toSet() },
                     routingEngine = RoutingEngine(emptyList()),
                 )
-                // Publish ownership before starting workers so teardown can never
-                // miss a partially-started bridge. The lifecycle lock prevents
-                // teardown from observing it until start has returned or failed.
+                // Publish ownership before starting workers so teardown cannot miss
+                // a partially-started bridge; the lifecycle lock excludes teardown.
                 tunBridge = bridge
                 try {
                     DiagnosticsLog.i(TAG, "Starting userspace filter bridge (blocked apps=${profile.blockedApps.size})")
@@ -2835,25 +2839,28 @@ class AetherVpnService : VpnService() {
                     if (tunBridge === bridge) tunBridge = null
                     throw failure
                 }
-                return
+            } else {
+                val config = writeHevConfig(
+                    profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
+                    socksPort,
+                )
+                // HEV duplicates this descriptor in JNI and owns the duplicate
+                // until its native worker has fully returned.
+                val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
+                DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
+                tunnelStarted = true
+                try {
+                    HevTunnel.start(config.absolutePath, fd)
+                    context.ensureActive()
+                } catch (failure: Throwable) {
+                    runCatching { HevTunnel.stop() }
+                    tunnelStarted = false
+                    throw failure
+                }
             }
-            val config = writeHevConfig(profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX), socksPort)
-            // Use the LIVE fd of the ParcelFileDescriptor (do NOT detach): hev uses it
-            // while running and we close the pfd ourselves on teardown. The fd is only
-            // valid inside THIS process, which is exactly why hev must run in-process.
-            val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
-            DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
-            // Mark ownership before entering JNI: if native start throws after
-            // accepting a generation, the common cleanup path still requests stop.
-            tunnelStarted = true
-            try {
-                HevTunnel.start(config.absolutePath, fd)
-                context.ensureActive()
-            } catch (failure: Throwable) {
-                runCatching { HevTunnel.stop() }
-                tunnelStarted = false
-                throw failure
-            }
+        }
+        check(started) {
+            "Previous HEV worker did not exit; refusing to start an overlapping tunnel."
         }
     }
 
