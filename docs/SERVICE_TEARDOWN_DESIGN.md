@@ -543,3 +543,42 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - This does not change the counter ownership rule: teardown close does not decrement liveConnections/liveLanClients; handler finally or dispatch rollback remains the exactly-once release owner.
 - This is a real lock-hold-time / potential blocking-I/O concern, not a demonstrated counter corruption. A safe fix needs a deliberate detach-under-lock, close-after-unlock design across ensureLanLocked(), closeLanLocked(), closeAllLocked(), start/stop and watcher call sites. Simply making registry callbacks asynchronous could race the next session's fixed-port bind, so no speculative asynchronous workaround was introduced.
 - JVM/Android build and tests remain unexecuted. Current-head workflow lookup returned no PR runs, and commit status/check-runs contain zero checks; historical successful runs are for older SHAs only.
+
+
+### ShareBridge teardown close call-site inventory and safe refactor boundary (2026-11-26)
+
+A follow-up call-site audit confirms that moving only the close callbacks out of `ShareListenerRegistry` is insufficient. The callers currently hold the `ShareBridge` monitor across both ownership mutation and close:
+
+- `startSyncForGeneration()`: the whole startup transition is a `synchronized(this)` expression. It can call `closeLanLocked()` when switching to local-only, `closeAllLocked()` before replacing a dead/inactive session, and `closeAllLocked()` after a partial loopback bind failure. It then binds the fixed loopback ports in the same critical section.
+- `stop()`: its stop worker enters `synchronized(this)` and calls `closeAllLocked()`.
+- `disableLan()`: its worker enters `synchronized(this)` and calls `closeLanLocked()`.
+- `ensureLanLocked()`: called under the monitor from startup, enable-LAN, mode/route refresh and the watcher. It calls `closeLanLocked()` for disabled LAN, direct routes, missing targets, and calls `lanListeners.retain()` plus `activeClients.retain()` during interface reconciliation. The registry's current `retain()` closes removed entries synchronously. After retain, this same method may bind replacement listeners on the fixed LAN ports.
+- `closeLanLocked()`: calls `lanListeners.closeAll()` and `activeClients.retain()`; both synchronously close removed owners.
+- `closeAllLocked()`: calls `closeLanLocked()`, `activeClients.closeAll()`, and closes the loopback SOCKS/HTTP ServerSockets inline.
+- The watcher, `enableLan()`, `setMode()`, and `noteEngineRoutes()` all invoke `ensureLanLocked()` from monitor-held sections. Fixing only stop/start would therefore leave the watcher and configuration paths with the same blocking-close behavior.
+
+The safe refactor should be a two-phase, synchronous reconciliation protocol, not fire-and-forget close:
+
+1. Under the bridge monitor, invalidate the relevant command/session generation, detach the old listener/client owners from registries, clear their published ownership snapshots, and capture the exact resources to close. No socket close is allowed in this phase.
+2. Exit the bridge monitor and synchronously close the detached resources. A close batch must have a completion boundary; callers must not proceed to bind a conflicting fixed address/port while the batch is outstanding.
+3. Re-enter the monitor and revalidate command generation, session, LAN request generation, configuration generation, active state, and current interface targets. Only the still-current operation may bind/register replacement listeners.
+4. If a newer operation superseded the caller while it was closing, the stale caller must not bind. Any resources it created before discovering staleness must themselves be detached and closed using the same outside-monitor path.
+5. Stop and start must share an ordering barrier for loopback ports as well as LAN reconciliation must share one for per-interface ports. The barrier must cover close completion, not merely registry removal.
+
+This implies changing the shape of `ensureLanLocked()`: it cannot both detach stale listeners and bind replacements in one monitor-held function. It should become a planning/detach phase that returns a close batch plus a reconciliation plan, followed by outside-monitor close and a generation-checked bind phase. Similarly, `startSyncForGeneration()`, stop, and disable-LAN must become explicit multi-phase operations rather than expression-bodied/inline synchronized blocks.
+
+Do not implement this by making `ShareListenerRegistry` invoke callbacks on an executor. That would release the bridge monitor but would not guarantee that the old ServerSocket has relinquished a fixed port before the next bind. A close executor would only be acceptable if every conflicting bind awaited a completion primitive tied to the exact detached batch, and generation validation still occurred after that wait.
+
+Counter ownership is deliberately unchanged by this refactor: teardown detaches/closes `ActiveClient` owners but does not decrement `liveConnections` or `liveLanClients`. Successful dispatch rollback or handler-finally continues to own the shared atomic exactly-once release. Do not decrement from the close batch, because close may race the handler's finally path.
+
+Required JVM coverage before considering the production refactor complete:
+
+- Registry detach is non-closing; detached entries are no longer discoverable while still open.
+- Closing a detached batch closes each listener/client exactly once, including duplicate teardown attempts.
+- A deterministic latch test proves the replacement bind phase cannot begin until the prior close batch completes.
+- A stop/start race proves an older start cannot bind after a newer stop generation while its close batch is blocked.
+- A LAN interface replacement race proves the new listener is not bound until the removed listener's sockets are closed.
+- A stale watcher/configuration reconciliation cannot bind after a newer LAN request or session generation.
+- Teardown close racing handler-finally preserves exactly-once counter release and does not publish a stale LAN count.
+
+No production synchronization refactor is made in this commit. The required change spans all the monitor-held entry points above; a partial conversion of only `closeLanLocked()` or `closeAllLocked()` would either still close under the monitor or permit fixed-port bind races. The current code remains subject to the documented monitor hold-time risk. Build and JVM tests remain unexecuted.
