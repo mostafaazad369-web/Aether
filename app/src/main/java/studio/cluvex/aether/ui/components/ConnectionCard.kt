@@ -189,6 +189,9 @@ fun ConnectionCard(
     // Only alive while connected: no frame subscription when there is nothing
     // to show off.
     val cycle = if (connected && LocalHomeVisible.current && LocalHomeAnimationsEnabled.current) rememberGlowCycle() else null
+    var detail by remember { mutableStateOf(DETAIL_NONE) }
+    var chainLabel by remember { mutableStateOf("") }
+    var traffic by remember { mutableStateOf(TrafficStats()) }
 
     Box(
         modifier = modifier
@@ -220,11 +223,32 @@ fun ConnectionCard(
             StatusBlock(title = statusTitle, caption = statusCaption, accent = accent)
             TimerBlock(connectedSince = connectedSince, connected = connected)
             ServerIpPill(connected = connected, ipInfo = ipInfo, ipLoading = ipLoading)
-            SpeedStrip(connectedSince = connectedSince, connected = connected)
-            MetaSlides(connected = connected, backend = backend)
+            SpeedStrip(connectedSince = connectedSince, connected = connected, onClick = { stats ->
+                traffic = stats
+                detail = DETAIL_TRAFFIC
+            })
+            MetaSlides(connected = connected, backend = backend, onChain = { label ->
+                chainLabel = label
+                detail = DETAIL_CHAIN
+            })
         }
     }
+    when (detail) {
+        DETAIL_CHAIN -> ChainDetailsDialog(
+            chain = chainLabel, ipInfo = ipInfo, connected = connected,
+            onDismiss = { detail = DETAIL_NONE },
+        )
+        DETAIL_TRAFFIC -> TrafficDetailsDialog(
+            connected = connected, sinceMs = connectedSince,
+            downTotal = traffic.downTotal, upTotal = traffic.upTotal,
+            onDismiss = { detail = DETAIL_NONE },
+        )
+    }
 }
+
+private const val DETAIL_NONE = 0
+private const val DETAIL_CHAIN = 1
+private const val DETAIL_TRAFFIC = 2
 
 // --------------------------------------------------------------- 1. status
 
@@ -471,13 +495,13 @@ private fun copyToClipboard(context: Context, text: String) {
 // --------------------------------------------------------------- 4. speeds
 
 @Composable
-private fun SpeedStrip(connectedSince: Long?, connected: Boolean, onClick: (() -> Unit)? = null) {
+private fun SpeedStrip(connectedSince: Long?, connected: Boolean, onClick: ((TrafficStats) -> Unit)? = null) {
     val stats = rememberTrafficStats(connectedSince = connectedSince, connected = connected)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable { onClick(stats) } else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -560,7 +584,7 @@ private fun SpeedCell(
  * [connected], exactly as the old three-column strip had it.
  */
 @Composable
-private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
+private fun MetaSlides(connected: Boolean, backend: TransportBackend, onChain: (String) -> Unit = {}) {
     val meta by EngineMeta.state.collectAsState()
     val ping by PingMonitor.state.collectAsState()
     var showPingDetails by remember { mutableStateOf(false) }
@@ -624,6 +648,7 @@ private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
             label = stringResource(R.string.meta_pipeline),
             value = pipelineForms.first(),
             forms = pipelineForms,
+            onClick = { onChain(pipelineForms.first()) },
         )
         // r4: the Endpoint slide is gone. The engine's gateway address told the
         // user nothing they could act on (it is picked and rotated by the scan),
@@ -670,6 +695,7 @@ private fun MetaSlide(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 14.dp, vertical = 9.dp),
