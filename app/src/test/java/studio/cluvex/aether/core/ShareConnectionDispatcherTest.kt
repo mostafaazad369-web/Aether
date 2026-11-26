@@ -1,6 +1,7 @@
 package studio.cluvex.aether.core
 
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -72,6 +73,66 @@ class ShareConnectionDispatcherTest {
         assertEquals(false, workerFinally.isAlive)
         assertEquals(false, dispatchRollback.isAlive)
         assertEquals(1, releases.get())
+    }
+
+    @Test
+    fun stopBeforeDispatchRejectsStaleWorkerHandoff() {
+        val lock = Any()
+        var current = true
+        var started = false
+
+        synchronized(lock) { current = false }
+        try {
+            ShareConnectionHandoff.startIfCurrent(
+                lock = lock,
+                isCurrent = { current },
+                startWorker = { started = true },
+            )
+        } catch (_: IllegalStateException) {
+            // Expected: teardown invalidated the generation first.
+        }
+
+        assertEquals(false, started)
+    }
+
+    @Test
+    fun dispatchBeforeStopCompletesHandoffBeforeTeardownCanInvalidate() {
+        val lock = Any()
+        var current = true
+        var started = false
+        val handoffEntered = CountDownLatch(1)
+        val allowHandoffToFinish = CountDownLatch(1)
+        val teardownFinished = CountDownLatch(1)
+
+        val dispatch = Thread {
+            ShareConnectionHandoff.startIfCurrent(
+                lock = lock,
+                isCurrent = { current },
+                startWorker = {
+                    started = true
+                    handoffEntered.countDown()
+                    check(allowHandoffToFinish.await(1, TimeUnit.SECONDS))
+                },
+            )
+        }
+        dispatch.start()
+        assertEquals(true, handoffEntered.await(1, TimeUnit.SECONDS))
+
+        val teardown = Thread {
+            synchronized(lock) { current = false }
+            teardownFinished.countDown()
+        }
+        teardown.start()
+
+        allowHandoffToFinish.countDown()
+        dispatch.join(1_000)
+        teardown.join(1_000)
+
+        assertEquals(false, dispatch.isAlive)
+        assertEquals(false, teardown.isAlive)
+        assertEquals(true, teardownFinished.count == 0L)
+        assertEquals(true, started)
+        assertEquals(false, current)
     }
 
     @Test
