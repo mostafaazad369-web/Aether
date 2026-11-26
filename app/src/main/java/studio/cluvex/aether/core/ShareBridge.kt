@@ -891,11 +891,16 @@ object ShareBridge {
                 }
 
                 val admissionRelease = ShareConnectionRelease {
+                    // Serialize counter mutation and publication with admit(), which
+                    // runs under this same monitor. Otherwise an older release can
+                    // publish a stale count after a newer admission has published.
                     synchronized(this) {
                         activeClients.retain { it.socket !== client }
+                        liveConnections.decrementAndGet()
+                        if (via != null) {
+                            _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
+                        }
                     }
-                    liveConnections.decrementAndGet()
-                    if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
                     runCatching { client.close() }
                 }
                 ShareConnectionDispatcher.dispatch(
