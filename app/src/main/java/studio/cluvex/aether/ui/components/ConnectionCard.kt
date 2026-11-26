@@ -23,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -476,6 +477,7 @@ private fun SpeedStrip(connectedSince: Long?, connected: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -561,6 +563,7 @@ private fun SpeedCell(
 private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
     val meta by EngineMeta.state.collectAsState()
     val ping by PingMonitor.state.collectAsState()
+    var showPingDetails by remember { mutableStateOf(false) }
 
     // Same validated HTTPS generate_204 metric as the config catalog, through
     // the live tunnel. PingMonitor serialises probes and reuses its channel.
@@ -630,8 +633,10 @@ private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
             value = latency,
             below = { PingStrength(connected = connected, ms = if (stale) -1L else lastMs, failed = ping.error) },
             stale = stale,
+            onClick = { showPingDetails = true },
         )
     }
+    if (showPingDetails) PingDetailsDialog(onDismiss = { showPingDetails = false })
 }
 
 /**
@@ -651,6 +656,7 @@ private fun MetaSlide(
     forms: List<String> = listOf(value),
     /** 1.6.0: dims the value when it is a retained reading, not a fresh one. */
     stale: Boolean = false,
+    onClick: (() -> Unit)? = null,
 ) {
     val valueStyle = MaterialTheme.typography.bodySmall.copy(
         fontSize = 13.sp,

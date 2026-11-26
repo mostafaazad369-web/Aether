@@ -289,7 +289,17 @@
     <string name="blocked_apps_desc">Blocked apps get no internet at all while the VPN is on. Activates the built-in filter bridge.</string>
     <!-- 1.2.4: desktop-parity info row under the IP badge -->
     <string name="meta_protocol">Protocol</string>
-    <string name="meta_latency">Latency</string>
+    <string name="meta_latency">Latency · tap for details</string>
+    <string name="ping_details_title">Connection quality</string>
+    <string name="ping_details_samples">Samples</string>
+    <string name="ping_details_answered">Answered</string>
+    <string name="ping_details_last">Last latency</string>
+    <string name="ping_details_min">Minimum</string>
+    <string name="ping_details_max">Maximum</string>
+    <string name="ping_details_avg">Average</string>
+    <string name="ping_details_jitter">Jitter</string>
+    <string name="ping_details_loss">Packet loss</string>
+    <string name="ping_details_close">Close</string>
     <string name="route_sniff_title">Match domain rules behind the tunnel</string>
     <string name="route_sniff_desc">Reads the site name from the TLS/HTTP handshake, so the domain rules above also work on Android, where the engine otherwise only sees an IP address.</string>
     <string name="route_sniff_ms_label">Name wait window (ms)</string>

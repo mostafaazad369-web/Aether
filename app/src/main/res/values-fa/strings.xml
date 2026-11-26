@@ -282,7 +282,17 @@
     <string name="blocked_apps_desc">اپ‌های مسدودشده هنگام روشن بودن ⁨VPN⁩ هیچ دسترسی به اینترنت ندارند. پل فیلتر داخلی فعال می‌شود.</string>
     <!-- 1.2.4 -->
     <string name="meta_protocol">پروتکل</string>
-    <string name="meta_latency">تأخیر</string>
+    <string name="meta_latency">تأخیر · برای جزئیات لمس کنید</string>
+    <string name="ping_details_title">کیفیت اتصال</string>
+    <string name="ping_details_samples">تعداد نمونه‌ها</string>
+    <string name="ping_details_answered">پاسخ‌داده‌شده</string>
+    <string name="ping_details_last">تأخیر اخیر</string>
+    <string name="ping_details_min">کمترین</string>
+    <string name="ping_details_max">بیشترین</string>
+    <string name="ping_details_avg">میانگین</string>
+    <string name="ping_details_jitter">نوسان تأخیر</string>
+    <string name="ping_details_loss">درصد ازدست‌رفتن بسته</string>
+    <string name="ping_details_close">بستن</string>
 
     <!-- قابلیت‌های هستهٔ 1.7.0 حفظ‌شده در نسخهٔ ۱.۲.۷ -->
     <string name="route_sniff_title">تطبیق قواعد دامنه در پشت تونل</string>
