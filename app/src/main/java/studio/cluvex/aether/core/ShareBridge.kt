@@ -973,17 +973,19 @@ object ShareBridge {
                 }
 
                 val admissionRelease = ShareConnectionRelease {
-                    // Serialize counter mutation and publication with admit(), which
-                    // runs under this same monitor. Otherwise an older release can
-                    // publish a stale count after a newer admission has published.
-                    synchronized(this) {
-                        activeClients.retain { it.socket !== client }
+                    // Detach ownership and publish counters under the bridge monitor,
+                    // but never invoke ActiveClient.close() while holding that monitor.
+                    // If teardown already detached this client, its close batch owns
+                    // the close; otherwise this release batch owns it.
+                    val releaseBatch = synchronized(this) {
+                        val detached = activeClients.detachWhere { it.socket !== client }
                         liveConnections.decrementAndGet()
                         if (via != null) {
                             _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
                         }
+                        detached
                     }
-                    runCatching { client.close() }
+                    releaseBatch.close()
                 }
                 ShareConnectionDispatcher.dispatch(
                     startWorker = {
