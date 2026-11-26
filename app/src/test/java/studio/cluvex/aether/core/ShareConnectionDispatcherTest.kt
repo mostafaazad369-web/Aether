@@ -220,6 +220,42 @@ class ShareConnectionDispatcherTest {
     }
 
     @Test
+    fun delayedReleaseCannotPublishStaleCountAfterConcurrentAdmission() {
+        val lock = Any()
+        val lan = AtomicInteger(1)
+        val published = AtomicInteger(1)
+        val releaseUpdatedCounter = CountDownLatch(1)
+        val allowReleaseToPublish = CountDownLatch(1)
+
+        val release = Thread {
+            synchronized(lock) {
+                val current = lan.decrementAndGet()
+                releaseUpdatedCounter.countDown()
+                check(allowReleaseToPublish.await(1, TimeUnit.SECONDS))
+                published.set(current)
+            }
+        }
+        release.start()
+        assertEquals(true, releaseUpdatedCounter.await(1, TimeUnit.SECONDS))
+
+        val admission = Thread {
+            synchronized(lock) {
+                published.set(lan.incrementAndGet())
+            }
+        }
+        admission.start()
+        // Admission cannot publish between the old release's mutation and publication.
+        allowReleaseToPublish.countDown()
+        release.join(1_000)
+        admission.join(1_000)
+
+        assertEquals(false, release.isAlive)
+        assertEquals(false, admission.isAlive)
+        assertEquals(1, lan.get())
+        assertEquals(1, published.get())
+    }
+
+    @Test
     fun successfulDispatchDoesNotRunRollback() {
         val releases = AtomicInteger(0)
         var started = false
