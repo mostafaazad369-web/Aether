@@ -901,18 +901,28 @@ object ShareBridge {
                 }
                 ShareConnectionDispatcher.dispatch(
                     startWorker = {
-                        Thread({
-                            try {
-                                client.tcpNoDelay = true
-                                handler(client)
-                            } catch (_: Exception) {
-                                // Per-connection errors are non-fatal by design.
-                            } finally {
-                                admissionRelease.release()
+                        synchronized(this) {
+                            // Serialize the handoff with stop/teardown. If teardown
+                            // won after accept registration, do not invoke a stale handler.
+                            check(
+                                session == listenerSession &&
+                                    _active.value &&
+                                    (via == null || lanRequested) &&
+                                    activeClients.any { it.socket === client }
+                            ) { "Connection listener generation stopped before dispatch." }
+                            Thread({
+                                try {
+                                    client.tcpNoDelay = true
+                                    handler(client)
+                                } catch (_: Exception) {
+                                    // Per-connection errors are non-fatal by design.
+                                } finally {
+                                    admissionRelease.release()
+                                }
+                            }, "$name-conn").apply {
+                                isDaemon = true
+                                start()
                             }
-                        }, "$name-conn").apply {
-                            isDaemon = true
-                            start()
                         }
                     },
                     onFailure = {
