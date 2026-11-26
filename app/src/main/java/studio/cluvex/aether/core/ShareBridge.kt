@@ -891,23 +891,27 @@ object ShareBridge {
                     continue
                 }
 
-                val connectionWorker = Thread({
-                    try {
-                        client.tcpNoDelay = true
-                        handler(client)
-                    } catch (_: Exception) {
-                        // Per-connection errors are non-fatal by design.
-                    } finally {
-                        synchronized(this) {
-                            activeClients.retain { it.socket !== client }
-                        }
-                        liveConnections.decrementAndGet()
-                        if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
-                        runCatching { client.close() }
-                    }
-                }, "$name-conn").apply { isDaemon = true }
                 ShareConnectionDispatcher.dispatch(
-                    startWorker = { connectionWorker.start() },
+                    startWorker = {
+                        Thread({
+                            try {
+                                client.tcpNoDelay = true
+                                handler(client)
+                            } catch (_: Exception) {
+                                // Per-connection errors are non-fatal by design.
+                            } finally {
+                                synchronized(this) {
+                                    activeClients.retain { it.socket !== client }
+                                }
+                                liveConnections.decrementAndGet()
+                                if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
+                                runCatching { client.close() }
+                            }
+                        }, "$name-conn").apply {
+                            isDaemon = true
+                            start()
+                        }
+                    },
                     onFailure = {
                         // Admission already reserved capacity and registered ownership.
                         // If dispatch fails, release both synchronously before propagating.
