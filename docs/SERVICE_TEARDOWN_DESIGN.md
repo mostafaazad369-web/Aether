@@ -521,3 +521,7 @@ The follow-up implementation now also guards the asynchronous LAN controls and r
 - Removed the new-session reset of `_lanClients.value`. The observable LAN count now remains aligned with the process-wide `liveLanClients` counter while old handlers unwind; a delayed old-session release decrements the shared count and publishes the current total, including any new-session LAN admissions.
 - Added a JVM test modelling an old-session delayed release after a new-session LAN admission and asserting that the new admission remains counted.
 - This covers the counter/release primitive contract, not a full concurrent ShareBridge stop/start with real sockets. No Build or test execution is claimed.
+
+
+- Admission increments and handler release decrements now both mutate and publish the LAN count while holding the `ShareBridge` monitor. This prevents an older release from decrementing first, pausing, and then overwriting a newer admission's published StateFlow value. Client socket close remains outside the monitor after ownership removal and counter publication.
+- Added a latch-coordinated JVM test for the stale-publication interleaving. It validates the monitor-serialization contract with counters, not a full Android socket/session integration.
