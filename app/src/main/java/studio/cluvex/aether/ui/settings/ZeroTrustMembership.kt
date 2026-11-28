@@ -119,8 +119,24 @@ internal fun ZeroTrustMembershipGroup(profile: ConnectionProfile, editable: Bool
         }
     }
     var record by remember { mutableStateOf<TeamSignInRecord?>(null) }
+    var signInStorageError by remember { mutableStateOf(false) }
     LaunchedEffect(editable, refresh) {
-        record = withContext(Dispatchers.IO) { TeamSignInStore(context).load() }
+        when (val stored = withContext(Dispatchers.IO) { TeamSignInStore(context).loadResult() }) {
+            TeamSignInStore.LoadResult.Missing -> {
+                record = null
+                signInStorageError = false
+            }
+            is TeamSignInStore.LoadResult.Record -> {
+                record = stored.value
+                signInStorageError = false
+            }
+            is TeamSignInStore.LoadResult.KeyUnavailable,
+            is TeamSignInStore.LoadResult.CorruptData,
+            is TeamSignInStore.LoadResult.StorageFailure -> {
+                record = null
+                signInStorageError = true
+            }
+        }
     }
 
     var showSignIn by remember { mutableStateOf(false) }
@@ -146,16 +162,25 @@ internal fun ZeroTrustMembershipGroup(profile: ConnectionProfile, editable: Bool
                 )
             }
             else -> when (profile.teamAuth) {
-                TeamAuth.EMAIL -> EmailSignInRows(
+                TeamAuth.EMAIL -> if (signInStorageError) {
+                    SettingsNoticeRow(
+                        "Saved sign-in data cannot be read safely. It has been preserved; resolve the device storage issue before signing in again.",
+                        Icons.Rounded.WarningAmber,
+                    )
+                } else EmailSignInRows(
                     profile = profile,
                     record = record,
                     editable = editable,
                     onSignIn = { showSignIn = true },
                     onSignOut = {
                         scope.launch {
-                            withContext(Dispatchers.IO) { TeamSignInStore(context).clear() }
-                            refresh++
-                            toast(context, context.getString(R.string.zt_signed_out))
+                            val cleared = withContext(Dispatchers.IO) { TeamSignInStore(context).clear() }
+                            if (cleared == studio.cluvex.aether.data.SecretStore.WriteResult.Cleared) {
+                                refresh++
+                                toast(context, context.getString(R.string.zt_signed_out))
+                            } else {
+                                toast(context, "Could not safely clear the saved sign-in.")
+                            }
                         }
                     },
                 )
@@ -458,8 +483,10 @@ internal fun ZeroTrustSignInDialog(
             ?: return Problem.Remote(ZeroTrustSignIn.Failure.BadTeam)
         val readBack = withContext(Dispatchers.IO) {
             val vault = TeamSignInStore(context)
-            vault.save(record)
-            vault.load()?.token
+            if (vault.save(record) != studio.cluvex.aether.data.SecretStore.WriteResult.Saved) {
+                return@withContext null
+            }
+            (vault.loadResult() as? TeamSignInStore.LoadResult.Record)?.value?.token
         }
         return if (readBack == record.token) null else Problem.StoreFailed
     }

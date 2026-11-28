@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Aether</string>
-    <string name="tagline">Freedom, in one tap</string>
+    <string name="app_name">Aether Pro</string>
+    <string name="tagline">Your network. Your control.</string>
 
     <string name="advanced">Advanced settings</string>
 
@@ -42,8 +42,8 @@
     <string name="reconnect_attempt">Attempt %1$d of %2$d</string>
 
     <string name="notif_channel">VPN status</string>
-    <string name="notif_channel_desc">Shows the Aether connection status</string>
-    <string name="notif_title">Aether</string>
+    <string name="notif_channel_desc">Shows the Aether Pro connection status</string>
+    <string name="notif_title">Aether Pro</string>
     <!--
       1.3.1, issue #20: the notification's action BUTTON used to be labelled with
       state_disconnecting ("Disconnecting…"), so the ongoing notification read
@@ -96,7 +96,7 @@
     <string name="advanced_open">Open advanced settings</string>
 
     <!-- Quick Settings tile -->
-    <string name="qs_tile_label">Aether</string>
+    <string name="qs_tile_label">Aether Pro</string>
 
     <!-- Share VPN panel -->
     <string name="share_title">Share VPN</string>
@@ -237,7 +237,7 @@
     <string name="dns_hint">1.1.1.1, 1.0.0.1</string>
     <string name="dns_help">Leave empty for the engine default (1.1.1.1, 1.0.0.1). Invalid entries are ignored.</string>
     <!-- Feature merge: home-screen widget, onboarding, ping, crash report -->
-    <string name="widget_desc">Connect or disconnect Aether with one tap</string>
+    <string name="widget_desc">Connect or disconnect Aether Pro with one tap</string>
     <string name="widget_toggle_desc">Toggle connection</string>
     <string name="ping_label">Ping</string>
     <string name="ping_measuring">Measuring…</string>
@@ -246,13 +246,13 @@
     <string name="onboarding_skip">Skip</string>
     <string name="onboarding_next">Next</string>
     <string name="onboarding_start">Get started</string>
-    <string name="onboarding_title_1">Welcome to Aether</string>
+    <string name="onboarding_title_1">Welcome to Aether Pro</string>
     <string name="onboarding_body_1">A fast, secure tunnel that beats censorship. One tap connects you through MASQUE, WireGuard or WARP×2.</string>
     <string name="onboarding_title_2">Smart protocol selection</string>
     <string name="onboarding_body_2">Smart mode analyzes your network and picks the protocol that actually works, with anti-DPI obfuscation when needed.</string>
     <string name="onboarding_title_3">Private by design</string>
     <string name="onboarding_body_3">No accounts, no logs, no trackers. Android will ask for VPN permission on your first connect; that is the system keeping you in control.</string>
-    <string name="crash_title">Aether stopped unexpectedly</string>
+    <string name="crash_title">Aether Pro stopped unexpectedly</string>
     <string name="crash_subtitle">The details below were saved by the crash handler. You can copy them into a bug report.</string>
     <string name="crash_copy">Copy details</string>
     <string name="crash_copied">Copied</string>
@@ -264,6 +264,7 @@
     <string name="strict_kill_switch_title">Strict Kill Switch</string>
     <string name="strict_kill_switch_desc">Keep blocking even after a manual disconnect, until you lift it</string>
     <string name="state_killswitch">Kill switch active - traffic blocked</string>
+    <string name="state_killswitch_failed">Kill switch could not be activated - traffic may not be protected</string>
     <string name="ipv6_leak_title">IPv6 Leak Protection</string>
     <string name="ipv6_leak_desc">Route IPv6 traffic through the tunnel as well</string>
     <string name="smart_reconnect_title">Smart Reconnect</string>
@@ -289,8 +290,16 @@
     <!-- 1.2.4: desktop-parity info row under the IP badge -->
     <string name="meta_protocol">Protocol</string>
     <string name="meta_latency">Latency</string>
-
-    <!-- Core 1.7.0 features retained in 1.2.7 -->
+    <string name="ping_details_title">Connection quality</string>
+    <string name="ping_details_samples">Samples</string>
+    <string name="ping_details_answered">Answered</string>
+    <string name="ping_details_last">Last latency</string>
+    <string name="ping_details_min">Minimum</string>
+    <string name="ping_details_max">Maximum</string>
+    <string name="ping_details_avg">Average</string>
+    <string name="ping_details_jitter">Jitter</string>
+    <string name="ping_details_loss">Packet loss</string>
+    <string name="ping_details_close">Close</string>
     <string name="route_sniff_title">Match domain rules behind the tunnel</string>
     <string name="route_sniff_desc">Reads the site name from the TLS/HTTP handshake, so the domain rules above also work on Android, where the engine otherwise only sees an IP address.</string>
     <string name="route_sniff_ms_label">Name wait window (ms)</string>
@@ -309,6 +318,7 @@
     <string name="ping_quality_poor">Poor</string>
     <string name="ping_quality_measuring">Measuring</string>
     <string name="ping_quality_offline">Not connected</string>
+    <string name="ping_quality_failed">Measurement failed</string>
 
     <!-- 1.2.7: the settings screen, the in-app language switch and the
          cached-endpoint budget -->
@@ -361,34 +371,7 @@
     <string name="reset_confirm_title">Reset all settings?</string>
     <string name="reset_confirm_body">Every setting goes back to its default, including endpoint ranges, routing rules and enrolment details.</string>
     <string name="reset_confirm_ok">Reset</string>
-    <!-- =================================================================
-         1.2.9 - Gemini AI features.
-         Every key below MUST also exist in values-fa/strings.xml. A missing
-         Persian entry does not fail the build, it silently ships an English
-         sentence into a right-to-left screen, which is how a localised app
-         rots one string at a time.
-         ================================================================= -->
-    <string name="ai_title">Aether AI</string>
-    <string name="ai_subtitle">Gemini inside the app: explanations, tuning and chat</string>
-    <string name="ai_badge">AI</string>
-    <string name="cat_ai">Assistant</string>
-    <string name="cat_ai_desc">Explains any setting, reads the log, proposes tuning</string>
-
     <!-- key -->
-    <string name="ai_section_key">Gemini API key</string>
-    <string name="ai_key_label">API key</string>
-    <string name="ai_key_hint">AIza…</string>
-    <string name="ai_key_help">Get a free key from Google AI Studio (aistudio.google.com/apikey). It is stored on this phone sealed with a hardware-backed key, it is sent only to Google, and only ever through the tunnel. Resetting the app settings does not delete it.</string>
-    <string name="ai_key_show">Show</string>
-    <string name="ai_key_hide">Hide</string>
-    <string name="ai_key_paste">Paste</string>
-    <string name="ai_key_forget">Forget the key and the model list</string>
-    <string name="ai_key_forgotten">API key removed</string>
-    <string name="ai_test">Test the API connection</string>
-    <string name="ai_test_hint">Checks the key and lists the models it may use</string>
-    <string name="ai_test_running">Testing…</string>
-    <string name="ai_test_ok">Working — %1$d model(s) available through %2$s</string>
-    <string name="ai_test_failed">Not working: %1$s</string>
     <string name="a11y_connect">Connect</string>
     <string name="a11y_disconnect">Disconnect</string>
     <string name="a11y_cancel_connecting">Cancel connecting</string>
@@ -401,127 +384,14 @@
     <string name="a11y_select_message">Select message</string>
 
     <!-- models -->
-    <string name="ai_section_models">Models your key can use</string>
-    <string name="ai_model_label">Model</string>
-    <string name="ai_models_count">%1$d available</string>
-    <string name="ai_models_empty">No models discovered yet. Connect, then run the API test: the list is read from your own key, so it shows exactly the models that key is allowed to use.</string>
-    <string name="ai_models_refresh">Refresh the model list</string>
-
     <!-- behaviour -->
-    <string name="ai_section_behaviour">Behaviour</string>
-    <string name="ai_auto_optimize">Analyse the log on every connect</string>
-    <string name="ai_auto_optimize_desc">Off by default. When on, Gemini reads a redacted excerpt of this session\'s log after each successful connect and proposes settings that fit it, and the AI chat can read the current log automatically whenever you ask about it. Addresses and identifiers are masked before anything is sent.</string>
-    <string name="ai_auto_apply">Apply proposals automatically</string>
-    <string name="ai_auto_apply_desc">Write proposals straight into the settings instead of waiting for you to review them. Off by default, because a setting that changes on its own is hard to tell apart from a bug.</string>
-    <string name="ai_hints">Show AI icons next to options</string>
-    <string name="ai_hints_desc">Tap the icon beside any setting and Gemini explains what it is, what it is for and how to use it.</string>
-
     <!-- chat -->
-    <string name="ai_chat_open">Chat with Gemini</string>
-    <string name="ai_chat_subtitle">Ask anything, or say what you want changed</string>
-    <string name="ai_chat_model">Model: %1$s</string>
-    <string name="ai_chat_empty_title">Hi, I am Aether AI</string>
-    <string name="ai_chat_empty_body">I can explain any setting in this app, read this session\'s log and propose tuning, or just answer a question.</string>
-    <string name="ai_chat_suggest_1">Why is my connection slow right now?</string>
-    <string name="ai_chat_suggest_2">Which protocol should I use on mobile data?</string>
-    <string name="ai_chat_suggest_3">Explain MTU and pick the best one for me</string>
-    <string name="ai_chat_suggest_4">Make the tunnel harder to detect</string>
-    <string name="ai_chat_input_hint">Ask Aether AI…</string>
-    <string name="ai_chat_send">Send</string>
-    <string name="ai_chat_stop">Stop</string>
-    <string name="ai_chat_clear">Clear the conversation</string>
-    <string name="ai_chat_thinking">Thinking…</string>
-    <string name="ai_chat_copy">Copy answer</string>
-
-    <!-- explain sheet -->
-    <string name="ai_explain_title">What is this?</string>
-    <string name="ai_explain_loading">Asking Gemini…</string>
-    <string name="ai_explain_failed">%1$s</string>
-    <string name="ai_explain_retry">Try again</string>
-
     <!-- advisor -->
-    <string name="ai_advisor_title">Settings advisor</string>
-    <string name="ai_advisor_subtitle">What your network is doing, and the settings that fit it</string>
-    <string name="ai_advisor_run">Analyse this session</string>
-    <string name="ai_advisor_running">Reading the log and thinking…</string>
-    <string name="ai_advisor_idle">Gemini reads a redacted excerpt of this session\'s log — credentials removed, public addresses masked — and proposes tuning. Nothing changes until you press Apply.</string>
-    <string name="ai_advisor_failed">Could not analyse: %1$s</string>
-    <string name="ai_advisor_dpi">What your network appears to be doing</string>
-    <string name="ai_advisor_confidence">Confidence: %1$s</string>
-    <string name="ai_advisor_no_changes">Nothing worth changing — this session looks healthy.</string>
-    <string name="ai_confidence_high">high</string>
-    <string name="ai_confidence_medium">medium</string>
-    <string name="ai_confidence_low">low</string>
-
     <!-- proposals -->
-    <string name="ai_changes_title">Proposed settings (%1$d)</string>
-    <string name="ai_apply">Apply</string>
-    <string name="ai_applied">Applied</string>
-    <string name="ai_apply_note">Tunnel settings are handed to the engine when it starts, so these take effect on your next connect.</string>
-    <string name="ai_dismiss">Dismiss</string>
-
     <!-- gate -->
-    <string name="ai_gate_no_key">Add your Gemini API key to use the AI features.</string>
-    <string name="ai_gate_no_model">No model selected yet. Run the API test and one will be picked for you.</string>
-    <string name="ai_gate_disconnected">The AI needs the tunnel. Connect first: Google\'s AI endpoints are not reachable directly, and Aether\'s own traffic deliberately bypasses the tunnel it builds.</string>
-    <string name="ai_gate_wrong_mode">Switch the network backend to Aether → Psiphon. Google\'s AI endpoints refuse plain Aether/WARP exit addresses, which is why the AI only runs in the chained mode.</string>
-    <string name="ai_gate_fix_key">Open AI settings</string>
-    <string name="ai_gate_fix_mode">Open connection settings</string>
-
     <!-- errors -->
-    <!--
-      1.3.1, issues #31 and #11. Google retired the old "standard" Gemini API keys
-      during 2026: unrestricted ones stopped working on 19 June 2026 and ALL
-      standard keys are rejected from September 2026. Keys created in AI Studio
-      since then are "auth keys" bound to a Cloud service account. A key that used
-      to work and now does not is far more likely to be a retired key than a typo,
-      so the message says so first.
-    -->
-    <string name="ai_error_bad_key">Your API key was rejected. Google retired the old “standard” Gemini keys in 2026 — if this key used to work, create a new one in Google AI Studio and paste that instead.</string>
-    <string name="ai_error_rate_limit">Rate limit or quota reached. Wait a moment and retry.</string>
-    <string name="ai_error_no_model">That model is not available to your key. Refresh the model list.</string>
-    <string name="ai_error_transport">Could not reach Google through the tunnel.</string>
-    <string name="ai_error_protocol">Google\'s answer could not be read.</string>
-    <string name="ai_error_blocked">Gemini declined to answer that.</string>
-
     <!-- small print -->
-    <string name="ai_privacy_title">What leaves your device</string>
-    <string name="ai_privacy_body">Only what a request needs: your prompt, the name of the setting you asked about, and your current tuning values. The log analysis adds a redacted excerpt of the log, with credentials stripped and public addresses masked to their /16. Everything travels to Google through the tunnel, never directly.</string>
-    <string name="ai_scope_title">What the AI may change</string>
-    <string name="ai_scope_body">Tuning only: protocol, obfuscation, MTU, fragmentation, DNS, reconnect behaviour and the like. It can never change the network backend, the upstream proxy, routing rules, which apps are tunnelled, or any credential — those decide which traffic is protected, so they stay in your hands.</string>
-
-    <!-- ===== 1.2.9 AI additions ===================================== -->
-    <string name="ai_error_server">Google\'s AI service failed to answer. This is on their side, not your connection.</string>
-    <string name="ai_error_truncated">The answer was cut off before it finished. Try again.</string>
-    <string name="ai_advisor_unreadable">The model did not answer in the format the app needs, twice in a row. Try again, or pick another model.</string>
-    <string name="ai_advisor_empty_log">There is nothing in the connection log to analyse yet. Connect first, then run the analysis.</string>
-    <string name="ai_models_none_allowed">Your key can reach Google, but none of the models this app supports are available to it. Supported models:\n%1$s</string>
-    <string name="ai_models_filtered">Only the supported Flash models are shown</string>
-    <string name="ai_models_help">Only fast Flash models that answer reliably on a free key are listed. Gemini 3.1 Flash-Lite is the default because it has the highest free daily limit; the newer Flash models answer faster but hit the daily limit sooner. Image, video, audio and Pro models are hidden.</string>
     <!-- 1.4.0-r5: per-model guidance in the model picker -->
-    <string name="ai_model_desc_default">Default · highest daily limit, best for continuous everyday use</string>
-    <string name="ai_model_desc_fast">Very fast · reaches the free daily limit sooner</string>
-    <string name="ai_model_desc_alt">Flash-Lite family · high daily limit (alias/preview build)</string>
-    <string name="ai_applied_dialog_title">Saved for the next connection</string>
-    <string name="ai_applied_dialog_body">The new settings are stored, but the tunnel is already running with the old ones. Tunnel settings are handed to the engine when it starts, so disconnect and connect again for them to take effect.</string>
-    <string name="ai_applied_dialog_ok">Got it</string>
-    <string name="ai_explain_ask_chat">Did not understand? Ask the assistant</string>
-    <string name="ai_chat_retry">Try again</string>
-    <string name="ai_chat_edit">Edit</string>
-    <string name="ai_chat_delete">Delete</string>
-    <string name="ai_chat_edited">edited</string>
-    <string name="ai_chat_cancel">Cancel</string>
-    <string name="ai_chat_edit_title">Edit message</string>
-    <string name="ai_chat_edit_send">Send again</string>
-    <string name="ai_chat_edit_note">Everything after this message will be removed and the assistant will answer the edited question.</string>
-    <string name="ai_chat_selected">%1$d selected</string>
-    <string name="ai_chat_select_all">Select all</string>
-    <string name="ai_chat_selection_cancel">Cancel selection</string>
-    <string name="ai_chat_delete_selected">Delete selected</string>
-    <string name="ai_chat_delete_title">Delete %1$d message(s)?</string>
-    <string name="ai_chat_delete_body">This cannot be undone. Deleted messages are not sent to the assistant as context any more.</string>
-    <string name="ai_chat_delete_confirm">Delete</string>
-
     <!-- Tor (1.3.0, engine core 2.0.0) -->
     <string name="protocol_mim">MASQUE×2</string>
     <string name="state_tor_bootstrap">Building Tor circuits…</string>
@@ -546,8 +416,6 @@
     <string name="tor_bridge_lines_hint">obfs4 192.0.2.55:38114 &lt;FINGERPRINT&gt; cert=… iat-mode=0</string>
     <string name="tor_bridge_lines_desc">One per line, in the format bridges.torproject.org hands out. Leave empty to use the bridges the app fetches for your country. A line naming a transport the app does not ship is ignored.</string>
     <string name="tor_group_footer">Tor carries TCP only — in every app, on every platform. Aether answers DNS over TCP inside Tor and drops other UDP, so QUIC-capable apps fall back to TCP. That is normal and nothing is leaking: dropped UDP goes nowhere, least of all around Tor. Expect noticeably higher latency, and expect the first connect to take a while — Tor downloads its directory before it can build a circuit.</string>
-
-    <!-- Tor reverse chain (1.3.0) -->
     <string name="backend_help_tor_aether">The reverse chain: Tor first, then the Aether tunnel built INSIDE it. Your exit is a WARP address — the same as plain Aether — but the network you are on sees only Tor, and cannot tell that a VPN tunnel exists at all. Use it where Cloudflare/WARP itself is blocked or throttled but Tor still gets through. Carries normal UDP, unlike the Tor-exit modes.</string>
     <string name="protocol_forced_reverse">Fixed to MASQUE over HTTP/2 in this mode. Tor carries TCP only and WARP’s WireGuard endpoints answer on UDP alone, so the engine refuses WireGuard and WARP×2 here.</string>
 
@@ -562,8 +430,6 @@
     <string name="tor_check_title">Reachability check</string>
     <string name="tor_check_hint">check.torproject.org:443</string>
     <string name="tor_check_desc">The address Tor must reach before the bootstrap counts as working. Change it only if bootstrap keeps failing on a Tor that seems fine — the default target is itself blocked on some networks.</string>
-
-    <!-- Zero Trust e-mail login code (1.3.1, issue #12) -->
     <string name="zt_code_title">Enter your login code</string>
     <string name="zt_code_body">Your organization e-mailed a one-time code to %1$s. Type it here to finish joining.</string>
     <string name="zt_code_body_noaddr">Your organization e-mailed you a one-time code. Type it here to finish joining.</string>
@@ -625,7 +491,7 @@
 
     <string-array name="about_port_improvements">
         <item>Chained Psiphon → Aether mode added: a genuinely foreign exit IP behind Aether\'s obfuscated first hop</item>
-        <item>The same chained mode fixes the plain Iranian Aether IP problem, so AI services (Gemini and others) that reject that IP open normally</item>
+        <item>The same chained mode fixes the plain Aether WARP exit-IP problem for services that reject WARP addresses</item>
         <item>Exit-country picker with flags for the chained mode, plus a SOCKS front that also carries UDP so DNS and QUIC work through it</item>
         <item>A complete native Android app: the original edition is command-line only and has no Android or Windows graphical interface</item>
         <item>One-tap system-wide VPN through Android VpnService, with no manual proxy setup</item>
@@ -891,8 +757,6 @@
     <string name="cc_sub_update">Refresh link</string>
     <string name="cc_sub_url">Link URL</string>
     <string name="cc_sub_updated">Link updated</string>
-
-    <!-- Same-version functional repair: catalog, selection feedback and built-in verification. -->
     <string name="cc_tab_all">All</string>
     <string name="cc_add_config">Add config</string>
     <string name="cc_col_name">Server name</string>
@@ -932,6 +796,9 @@
 <string name="preset_import_preview">Import %1$d presets? Current settings will not change until a preset is selected. Proxy credentials, Zero Trust secrets and custom server data are excluded.</string>
 <string name="preset_export_done">Settings exported without credentials or custom servers.</string>
 <string name="preset_operation_failed">Preset operation failed. Storage may be unavailable or the settings file may be invalid.</string>
+    <string name="profile_storage_key_unavailable">Android Keystore is unavailable. Zero Trust credentials cannot be read or saved.</string>
+    <string name="profile_storage_corrupt">Stored Zero Trust credentials are damaged. They were preserved and must be repaired before use.</string>
+    <string name="profile_storage_failure">Secure Zero Trust credential storage failed. The profile was not accepted as saved.</string>
     <string name="cc_delete_tab_title">Delete tab and its configs</string>
     <string name="cc_delete_tab_confirm">Delete “%1$s” and all configs in this tab? This cannot be undone. The All tab is protected.</string>
 
@@ -1025,4 +892,29 @@
     <string name="no_ticket_desc">Leave out the session_ticket extension.</string>
     <string name="no_perm_title">Disable extension permutation</string>
     <string name="no_perm_desc">Keep one fixed order of the extensions instead of Chrome\'s per-handshake shuffle.</string>
+    <string name="share_credentials_storage_error">Saved sharing credentials cannot be read or safely updated. Sharing remains disabled until the device storage issue is resolved.</string>
+    <string name="cd_node_aether">Aether engine: Cloudflare WARP / MASQUE tunnel</string>
+    <string name="cd_node_tor">Tor network: three relays</string>
+    <string name="cd_node_psiphon">Psiphon network</string>
+    <string name="cd_node_config">Your own config (Xray)</string>
+    <string name="cd_chain_title">Connection chain</string>
+    <string name="cd_chain_offline">Not connected. Connect to see the nodes your traffic passes through.</string>
+    <string name="cd_chain_device">This device</string>
+    <string name="cd_role_single">The only node: your network sees it and websites see its address</string>
+    <string name="cd_role_first">First node: the only one your network (and its DPI) sees</string>
+    <string name="cd_role_exit">Exit node: websites see this node\'s address</string>
+    <string name="cd_role_middle">Middle node: carries the traffic between the others</string>
+    <string name="cd_chain_internet">Internet</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_traffic_title">Traffic details</string>
+    <string name="cd_traffic_apps">Apps using the internet</string>
+    <string name="cd_traffic_access_needed">Android shares per-app traffic only after you allow \"Usage access\" for Aether. The figures stay on this device.</string>
+    <string name="cd_traffic_grant">Allow usage access</string>
+    <string name="cd_traffic_none">No traffic recorded yet.</string>
+    <string name="cd_traffic_note">Figures come from Android\'s network statistics, which update with a short delay and are counted in time blocks. \"Now\" marks apps whose traffic grew in the last few seconds.</string>
+    <string name="cd_traffic_active">Now</string>
+    <string name="app_traffic_self">Aether (tunnel)</string>
+    <string name="app_traffic_removed">Removed apps</string>
+    <string name="app_traffic_tethering">Hotspot / tethering</string>
+    <string name="app_traffic_system">Android system</string>
 </resources>

@@ -27,6 +27,7 @@ import studio.cluvex.aether.MainActivity
 import studio.cluvex.aether.R
 import studio.cluvex.aether.core.AetherController
 import studio.cluvex.aether.core.AetherProcess
+import studio.cluvex.aether.core.EngineReadiness
 import studio.cluvex.aether.core.Diagnostics
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.core.EngineMeta
@@ -38,6 +39,7 @@ import studio.cluvex.aether.core.PortProbe
 import studio.cluvex.aether.core.TorBootstrap
 import studio.cluvex.aether.core.ProfileCodec
 import studio.cluvex.aether.core.HevTunnel
+import studio.cluvex.aether.core.startAfterNativeWorkerStopped
 import studio.cluvex.aether.core.RoutingEngine
 import studio.cluvex.aether.core.ShareBridge
 import studio.cluvex.aether.core.SmartAuto
@@ -105,6 +107,9 @@ class AetherVpnService : VpnService() {
      * attributed to the next session's card.
      */
     private val sessionEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /** Orders asynchronous stop/lockdown work so older teardown cannot overtake newer intent. */
+    private val stopGeneration = java.util.concurrent.atomic.AtomicLong(0L)
 
     override fun onCreate() {
         super.onCreate()
@@ -252,6 +257,13 @@ class AetherVpnService : VpnService() {
     /** Active userspace filter bridge (only when per-app blocking is on). */
     private var tunBridge: SocksTunBridge? = null
 
+    /**
+     * Serializes TUN creation/start with teardown. In particular, onDestroy and
+     * stopEverything may run on different threads while a connect coroutine is
+     * between establishTun() and startTun2Socks().
+     */
+    private val nativeLifecycleLock = Any()
+
     /** Last profile the service ran with (kill-switch decisions). */
     private var lastProfile: ConnectionProfile? = null
 
@@ -375,9 +387,27 @@ class AetherVpnService : VpnService() {
     private fun hydrateSecrets(profile: ConnectionProfile): ConnectionProfile {
         if (profile.teamAuth == TeamAuth.OFF) return profile
         val secrets = SecretStore(applicationContext)
+        fun read(name: String): String = when (val result = secrets.readResult(name)) {
+            SecretStore.ReadResult.Missing -> ""
+            is SecretStore.ReadResult.Value -> result.value
+            is SecretStore.ReadResult.KeyUnavailable ->
+                throw IllegalStateException("Zero Trust credential key is unavailable")
+            is SecretStore.ReadResult.CorruptData ->
+                throw IllegalStateException("Zero Trust credential data is damaged")
+            is SecretStore.ReadResult.StorageFailure ->
+                throw IllegalStateException("Zero Trust credential storage failed")
+        }
+        val clientSecret = read(SecretStore.ACCESS_SECRET)
+        val accessToken = read(SecretStore.ACCESS_TOKEN)
+        if (profile.teamAuth == TeamAuth.SERVICE_TOKEN && clientSecret.isBlank()) {
+            throw IllegalStateException("Zero Trust service-token secret is missing")
+        }
+        if (profile.teamAuth == TeamAuth.TOKEN && accessToken.isBlank()) {
+            throw IllegalStateException("Zero Trust enrolment token is missing")
+        }
         return profile.copy(
-            accessClientSecret = secrets.read(SecretStore.ACCESS_SECRET),
-            accessToken = secrets.read(SecretStore.ACCESS_TOKEN),
+            accessClientSecret = clientSecret,
+            accessToken = accessToken,
             accessSignInToken = signInTokenFor(profile),
         )
     }
@@ -399,8 +429,18 @@ class AetherVpnService : VpnService() {
     private fun signInTokenFor(profile: ConnectionProfile): String {
         if (profile.teamAuth != TeamAuth.EMAIL || !profile.hasTeam) return ""
         val store = TeamSignInStore(applicationContext)
+        val storedRecord = when (val stored = store.loadResult()) {
+            TeamSignInStore.LoadResult.Missing -> null
+            is TeamSignInStore.LoadResult.Record -> stored.value
+            is TeamSignInStore.LoadResult.KeyUnavailable ->
+                throw IllegalStateException("Zero Trust sign-in key is unavailable")
+            is TeamSignInStore.LoadResult.CorruptData ->
+                throw IllegalStateException("Zero Trust sign-in data is damaged")
+            is TeamSignInStore.LoadResult.StorageFailure ->
+                throw IllegalStateException("Zero Trust sign-in storage failed")
+        }
         val decision = TeamSignInHandoff.decide(
-            record = store.load(),
+            record = storedRecord,
             rawTeam = profile.team,
             rawEmail = profile.accessEmail,
             isEnrolled = { team -> TeamMembership.isEnrolled(filesDir, team) },
@@ -424,7 +464,9 @@ class AetherVpnService : VpnService() {
                 ""
             }
             TeamSignInHandoff.Decision.AlreadyEnrolled -> {
-                store.clear()
+                if (store.clear() != SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w(ZT_TAG, "Could not clear the already-used Zero Trust sign-in record.")
+                }
                 DiagnosticsLog.i(
                     ZT_TAG,
                     "This device is already enrolled in this team, so the saved sign-in is no " +
@@ -433,7 +475,9 @@ class AetherVpnService : VpnService() {
                 ""
             }
             TeamSignInHandoff.Decision.Unusable -> {
-                store.clear()
+                if (store.clear() != SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w(ZT_TAG, "Could not clear the unusable Zero Trust sign-in record.")
+                }
                 DiagnosticsLog.w(
                     ZT_TAG,
                     "The saved Zero Trust sign-in has expired and was removed; a code will be " +
@@ -445,8 +489,9 @@ class AetherVpnService : VpnService() {
     }
 
     private fun startTunnel(rawProfile: ConnectionProfile) {
-        val profile = hydrateSecrets(rawProfile)
-        lastProfile = profile
+        // A new connect supersedes pending stop/lockdown UI finalization. The
+        // teardown still finishes before this session touches shared resources.
+        stopGeneration.incrementAndGet()
         // 1.2.2 PROTOCOL-SWITCH FIX: this used to bail out silently whenever a
         // previous run coroutine was still winding down ("if active, return"),
         // so a connect tapped right after a disconnect — or right after
@@ -457,19 +502,26 @@ class AetherVpnService : VpnService() {
         val previousRun = runJob
         val previousStop = stopJob
         runJob = scope.launch {
+            // Finish any already-scheduled teardown before touching shared native
+            // handles. Otherwise this connect's eager cleanup can race the stop job.
+            previousStop?.join()
             if (previousRun != null) {
-                // Same ordering rule as the disconnect path: cancel, kill the
-                // natives (which unblocks the old session immediately), and
-                // only then wait for it to finish. Joining first would stall
-                // the new connect for as long as the old session's engine wait
-                // still had to run.
+                // Cancel, kill the natives (which unblocks the old session
+                // immediately), and only then wait for it to finish.
                 previousRun.cancel()
                 cleanupNativeOnly("superseded-by-new-connect")
                 stopCustom()
                 previousRun.join()
             }
-            previousStop?.join()
             try {
+                // HEV stop is asynchronous. Do not establish a replacement TUN or
+                // start a new native generation until the old pthread has returned
+                // and closed its duplicated descriptor.
+                check(HevTunnel.awaitStopped()) {
+                    "Previous HEV worker did not exit; refusing to start an overlapping tunnel."
+                }
+                val profile = hydrateSecrets(rawProfile)
+                lastProfile = profile
                 connectFlow(profile)
             } catch (e: CancellationException) {
                 ChainTrace.end("cancelled")
@@ -1470,8 +1522,7 @@ class AetherVpnService : VpnService() {
         } finally {
             // Belt and braces: whatever happened above, nothing from a lane may
             // still be holding a port when the session's own engine starts.
-            raceEngines.forEach { runCatching { it.stop() } }
-            raceEngines.clear()
+            stopTrackedRaceEngines()
         }
     }
 
@@ -1533,8 +1584,12 @@ class AetherVpnService : VpnService() {
                 // A probe is over the moment it has answered, win or lose. This runs
                 // on cancellation too, which is what stops a losing lane outliving
                 // the race.
-                runCatching { engine.stop() }
-                raceEngines.remove(engine)
+                val stopped = runCatching { engine.stop() }.getOrDefault(false)
+                if (stopped) {
+                    raceEngines.remove(engine)
+                } else {
+                    DiagnosticsLog.e(TAG, "Smart Plus lane $laneNumber: engine exit is unconfirmed; retaining it for teardown retry.")
+                }
             }
         }
         DiagnosticsLog.d(TAG, "Smart Plus lane $laneNumber: out of tactics.")
@@ -1554,9 +1609,10 @@ class AetherVpnService : VpnService() {
      * SMART AUTO (root-cause rework of the broken Auto protocol): fingerprint
      * the network's DPI first (see [SmartAuto]), then walk an ordered ladder
      * of concrete strategies — protocol + obfuscation + the IP ranges that
-     * actually answered on THIS network — until one passes the full 5-step
-     * self-test. Returns the strategy that won so the supervisor restarts the
-     * engine with the SAME working configuration.
+     * actually answered on THIS network — until one passes the configured
+     * readiness gate (the five-step self-test when verification is enabled).
+     * Returns the strategy that won so the supervisor restarts the engine with
+     * the SAME working configuration.
      */
     private suspend fun connectSmartAuto(userProfile: ConnectionProfile): ConnectionProfile {
         AetherController.setState(ConnectionState.Launching)
@@ -1614,8 +1670,10 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * Walks a ladder of strategies until one comes up and passes the full
-     * self-test. Each failed rung is torn down before the next is tried.
+     * Walks a ladder of strategies until one comes up and passes the configured
+     * readiness gate. When verification is enabled this is the full self-test;
+     * when the user disables it, the listener/process readiness policy applies.
+     * Each failed rung is torn down before the next is tried.
      */
     private suspend fun runLadder(
         plan: List<AutoCandidate>,
@@ -1716,7 +1774,9 @@ class AetherVpnService : VpnService() {
             "protocol=${profile.protocol} scan=${profile.scanMode} h2=${profile.masqueHttp2} budget=${timeoutMs}ms" +
                 (if (upstream.isNotBlank()) " upstream=$upstream" else ""),
         )
-        engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode)) }
+        val launchedEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+        engine = launchedEngine
+        launchedEngine.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode))
 
         AetherController.setState(ConnectionState.Connecting)
         updateNotification(getString(R.string.state_connecting))
@@ -1740,7 +1800,33 @@ class AetherVpnService : VpnService() {
             throw IllegalStateException(getString(R.string.err_engine_timeout))
         }
         ChainTrace.stage("engine-socks-open", "after=${waited}ms")
-        DiagnosticsLog.i(TAG, "SOCKS5 port is up.")
+        DiagnosticsLog.i(TAG, "SOCKS5 port is bound; checking that the engine is actually serving SOCKS5.")
+
+        // Aether 1.7 readiness fix: a bound port can accept TCP before the engine
+        // is ready to answer SOCKS5. Tor and custom-upstream paths retain their
+        // bootstrap/carrier-aware readiness gates.
+        val torOwnsReadiness = profile.backend.torMode == TorMode.ONLY ||
+            profile.backend.torMode == TorMode.REVERSE
+        if (!torOwnsReadiness && upstream.isBlank()) {
+            val remaining = (timeoutMs - (SystemClock.elapsedRealtime() - launchedAt)).coerceAtLeast(1_000L)
+            when (EngineReadiness.await(launchedEngine, SOCKS_HOST, SOCKS_PORT, remaining, "engine")) {
+                EngineReadiness.Outcome.READY -> ChainTrace.stage(
+                    "engine-serving",
+                    "after=${SystemClock.elapsedRealtime() - launchedAt}ms",
+                )
+                EngineReadiness.Outcome.DIED -> {
+                    ChainTrace.warn("engine-fail", "category=died-before-serving")
+                    DiagnosticsLog.e(TAG, "Engine exited before serving SOCKS5" +
+                        (launchedEngine.fatalLine?.let { ": $it" } ?: "."))
+                    throw IllegalStateException(getString(R.string.err_engine_died))
+                }
+                EngineReadiness.Outcome.TIMEOUT -> {
+                    ChainTrace.warn("engine-fail", "category=timeout-before-serving budget=${timeoutMs}ms")
+                    DiagnosticsLog.e(TAG, "Engine did not start serving SOCKS5 within this attempt's budget.")
+                    throw IllegalStateException(getString(R.string.err_engine_timeout))
+                }
+            }
+        }
 
         if (stageOnly) {
             if (!profile.verifyConnection && profile.backend.torMode !in listOf(TorMode.ONLY, TorMode.REVERSE)) {
@@ -1956,7 +2042,12 @@ class AetherVpnService : VpnService() {
                             "Watchdog: tunnel dead across $WATCHDOG_FAIL_CYCLES consecutive checks -- restarting the engine.",
                         )
                         probeFailures = 0
-                        engine?.stop()
+                        val stopped = engine?.stop() ?: true
+                        if (stopped) {
+                            engine = null
+                        } else {
+                            DiagnosticsLog.e(TAG, "Watchdog could not confirm engine exit; keeping its lease and will retry teardown.")
+                        }
                     }
                 }
                 continue
@@ -1977,7 +2068,20 @@ class AetherVpnService : VpnService() {
             updateNotification(getString(R.string.state_reconnecting))
             delay(backoff)
 
-            engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode)) }
+            // Reap the previous (possibly naturally exited) process before a
+            // replacement can unseal or use the same identity files.
+            val previousEngine = engine
+            if (previousEngine != null) {
+                if (!runCatching { previousEngine.stop() }.getOrDefault(false)) {
+                    DiagnosticsLog.e(TAG, "Reconnect deferred: previous engine is not confirmed reaped.")
+                    delay(WATCHDOG_INTERVAL_MS)
+                    continue
+                }
+                engine = null
+            }
+            val replacementEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+            engine = replacementEngine
+            replacementEngine.start(profile, studio.cluvex.aether.custom.CustomChainPolicy.runtimeEnvironment(profile, customSelection?.mode))
             if (PortProbe.awaitOpen(SOCKS_HOST, SOCKS_PORT, profile.connectTimeoutMs()) { engine?.isAlive() == true }) {
                 // Same gate as the initial connect: never claim Connected after
                 // a silent engine restart until traffic really flows again.
@@ -2152,7 +2256,9 @@ class AetherVpnService : VpnService() {
             DiagnosticsLog.w(TAG, "Local port $SOCKS_PORT is still busy - starting anyway.")
         }
         DiagnosticsLog.i(TAG, "Launching engine as plain Psiphon on $SOCKS_HOST:$SOCKS_PORT")
-        engine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir).also { it.start(stage) }
+        val launchedEngine = AetherProcess(applicationInfo.nativeLibraryDir, filesDir)
+        engine = launchedEngine
+        launchedEngine.start(stage)
 
         val transport = PsiphonTransport(
             service = this,
@@ -2234,7 +2340,17 @@ class AetherVpnService : VpnService() {
     }
 
     private suspend fun startXray(runner: XrayProcess, cfg: CustomConfig, dialVia: Int?): Int {
-        stopXrayOnly()
+        // Reserve a generation before suspendable config work; teardown invalidates it.
+        val generation = synchronized(xrayLock) {
+            check(xray === runner) { "Xray start was superseded before it began" }
+            xrayGeneration++
+            xrayWatch?.cancel()
+            xrayWatch = null
+            check(runner.stop()) {
+                "Previous Xray process has not been confirmed reaped; refusing to start another."
+            }
+            xrayGeneration
+        }
         val avoid = setOf(
             PortLease.socks, PortLease.torSocks, PortLease.torFront, PortLease.chain,
             PortLease.psiphon, ShareBridge.SOCKS_SHARE_PORT, ShareBridge.HTTP_SHARE_PORT,
@@ -2264,31 +2380,46 @@ class AetherVpnService : VpnService() {
                 muxConcurrency = mux,
             )
         }
-        withContext(Dispatchers.IO) { runner.start(config, "session") }
+        currentCoroutineContext().ensureActive()
+        synchronized(xrayLock) {
+            if (generation != xrayGeneration || xray !== runner) throw CancellationException("Xray start was superseded")
+            runner.start(config, "session")
+        }
         val open = PortProbe.awaitOpen(SOCKS_HOST, port, XRAY_START_TIMEOUT_MS) { runner.isAlive() }
         if (!open) {
             DiagnosticsLog.e(TAG, "Xray did not open $SOCKS_HOST:$port (see the xray lines above).")
-            runner.stop()
+            synchronized(xrayLock) {
+                if (generation == xrayGeneration && xray === runner) runCatching { runner.stop() }
+                else throw CancellationException("Xray start was superseded")
+            }
             throw IllegalStateException(getString(R.string.cc_err_core_failed))
         }
         val speaksSocks = withContext(Dispatchers.IO) {
             studio.cluvex.aether.core.NetProbe.checkSocksHandshake(SOCKS_HOST, port, 2_000)
         }
         if (!speaksSocks) {
-            runner.stop()
+            synchronized(xrayLock) {
+                if (generation == xrayGeneration && xray === runner) runCatching { runner.stop() }
+                else throw CancellationException("Xray start was superseded")
+            }
             throw IllegalStateException(getString(R.string.cc_err_core_failed))
         }
+        currentCoroutineContext().ensureActive()
         DiagnosticsLog.i(
             TAG,
             "Xray core listening on $SOCKS_HOST:$port" + (dialVia?.let { " (dialling via $it)" } ?: ""),
         )
-        watchXray(runner, config)
+        synchronized(xrayLock) {
+            if (generation != xrayGeneration || xray !== runner) throw CancellationException("Xray start was superseded")
+            watchXray(runner, config, generation)
+        }
         return port
     }
 
-    /** Restarts a crashed Xray on the same port (its config is unchanged), a few times. */
-    private fun watchXray(runner: XrayProcess, config: String) {
-        val generation = synchronized(xrayLock) { ++xrayGeneration }
+    /** Restarts a crashed Xray only while its owning generation remains current. */
+    private fun watchXray(runner: XrayProcess, config: String, generation: Int) {
+        if (generation != xrayGeneration || xray !== runner) return
+        xrayWatch?.cancel()
         xrayWatch = scope.launch(Dispatchers.IO) {
             var restarts = 0
             var healthySeconds = 0
@@ -2305,7 +2436,7 @@ class AetherVpnService : VpnService() {
                         restarts++
                         healthySeconds = 0
                         DiagnosticsLog.w(TAG, "Xray exited - restarting it ($restarts/$XRAY_MAX_RESTARTS).")
-                        runCatching { runner.start(config, "session") }
+                        if (xray === runner && generation == xrayGeneration) runCatching { runner.start(config, "session") }
                     }
                 }
             }
@@ -2374,20 +2505,21 @@ class AetherVpnService : VpnService() {
         if (currentScopeActive()) throw IllegalStateException(getString(R.string.cc_err_core_failed))
     }
 
-    private fun stopXrayOnly() {
+    /** Everything the custom-config code started; a no-op for every other session. */
+    private fun stopCustom() {
         synchronized(xrayLock) {
             xrayGeneration++
             xrayWatch?.cancel()
             xrayWatch = null
-            runCatching { xray?.stop() }
+            val current = xray
+            val stopped = current == null || runCatching { current.stop() }.getOrDefault(false)
+            if (stopped) {
+                xray = null
+                CustomSession.set(null)
+            } else {
+                DiagnosticsLog.e(TAG, "Xray exit is unconfirmed; retaining its handle and config for a later teardown retry.")
+            }
         }
-    }
-
-    /** Everything the custom-config code started; a no-op for every other session. */
-    private fun stopCustom() {
-        stopXrayOnly()
-        xray = null
-        CustomSession.set(null)
     }
 
     /** The resolvers of the network the phone is really on (outside the VPN). */
@@ -2501,40 +2633,53 @@ class AetherVpnService : VpnService() {
         }
     }
 
-    private fun establishTun(profile: ConnectionProfile) {
-        // 1.2.7-r3: a chained session's exit is a Psiphon server, and those are
-        // IPv4-only in practice. See [buildTun] for why the TUN then carries no
-        // IPv6 ADDRESS while still routing ::/0.
-        var withoutIpv6Address = profile.backend.isChained
-        var descriptor = runCatching { buildTun(profile, withoutIpv6Address).establish() }
-            .getOrNull()
-        if (descriptor == null && withoutIpv6Address) {
-            // Some ROMs refuse an interface that routes a family it has no
-            // address for. Falling back keeps the mode working exactly as it did
-            // before; the front's AAAA suppression then carries the fix alone.
-            DiagnosticsLog.w(
-                TAG,
-                "This device would not establish an IPv4-only-addressed TUN; re-establishing " +
-                    "with the IPv6 address. AAAA suppression in the Psiphon front still applies.",
-            )
-            withoutIpv6Address = false
-            descriptor = runCatching { buildTun(profile, false).establish() }.getOrNull()
-        }
-        tun = descriptor ?: throw IllegalStateException("Failed to establish the VPN interface")
+    private suspend fun establishTun(profile: ConnectionProfile) {
+        val context = currentCoroutineContext()
+        synchronized(nativeLifecycleLock) {
+            context.ensureActive()
+            // 1.2.7-r3: a chained session's exit is a Psiphon server, and those are
+            // IPv4-only in practice. See [buildTun] for why the TUN then carries no
+            // IPv6 ADDRESS while still routing ::/0.
+            var withoutIpv6Address = profile.backend.isChained
+            var descriptor = runCatching { buildTun(profile, withoutIpv6Address).establish() }
+                .getOrNull()
+            if (descriptor == null && withoutIpv6Address) {
+                // Some ROMs refuse an interface that routes a family it has no
+                // address for. Falling back keeps the mode working exactly as it did
+                // before; the front's AAAA suppression then carries the fix alone.
+                DiagnosticsLog.w(
+                    TAG,
+                    "This device would not establish an IPv4-only-addressed TUN; re-establishing " +
+                        "with the IPv6 address. AAAA suppression in the Psiphon front still applies.",
+                )
+                withoutIpv6Address = false
+                descriptor = runCatching { buildTun(profile, false).establish() }.getOrNull()
+            }
+            val established = descriptor ?: throw IllegalStateException("Failed to establish the VPN interface")
+            try {
+                // If cancellation arrived while Android was establishing the
+                // interface, do not publish a descriptor into a dead session.
+                context.ensureActive()
+            } catch (cancelled: CancellationException) {
+                runCatching { established.close() }
+                throw cancelled
+            }
+            tun = established
 
-        val mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX)
-        DiagnosticsLog.i(
-            TAG,
-            "TUN established: ipv4=${TunnelConfig.TUN_IPV4}/${TunnelConfig.TUN_IPV4_PREFIX} " +
-                "ipv6=" + (
-                if (withoutIpv6Address) {
-                    "none (::/0 routed, so nothing leaks and the resolver stops returning AAAA)"
-                } else {
-                    "${TunnelConfig.TUN_IPV6}/${TunnelConfig.TUN_IPV6_PREFIX}"
-                }
-                ) + " mtu=$mtu split=${profile.splitMode} apps=${profile.splitApps.size} " +
-                "dns=${TunnelConfig.DNS_SERVERS}",
-        )
+            val mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX)
+            DiagnosticsLog.i(
+                TAG,
+                "TUN established: ipv4=${TunnelConfig.TUN_IPV4}/${TunnelConfig.TUN_IPV4_PREFIX} " +
+                    "ipv6=" + (
+                    if (withoutIpv6Address) {
+                        "none (::/0 routed, so nothing leaks and the resolver stops returning AAAA)"
+                    } else {
+                        "${TunnelConfig.TUN_IPV6}/${TunnelConfig.TUN_IPV6_PREFIX}"
+                    }
+                    ) + " mtu=$mtu split=${profile.splitMode} apps=${profile.splitApps.size} " +
+                    "dns=${TunnelConfig.DNS_SERVERS}",
+            )
+        }
     }
 
     /**
@@ -2683,38 +2828,68 @@ class AetherVpnService : VpnService() {
      * would silently forward the whole device through stage 1 and hand the user
      * an Aether exit IP while the UI promised a Psiphon exit.
      */
-    private fun startTun2Socks(profile: ConnectionProfile, socksPort: Int) {
-        activeForwardPort = socksPort
-        if (profile.blockedApps.isNotEmpty()) {
-            // PER-APP BLOCKING (1.2.4): hev-socks5-tunnel cannot filter per
-            // UID, so a userspace filter bridge (merged into Aether's
-            // SocksTunBridge) reads the TUN itself, resolves each flow's
-            // owning app and drops blocked apps' packets. It is activated
-            // ONLY when blocking is configured; the battle-tested hev path
-            // below stays the default for everyone else.
-            val pfd = tun ?: throw IllegalStateException("TUN descriptor is null")
-            val bridge = SocksTunBridge(
-                vpnService = this,
-                tunDescriptor = pfd,
-                socksHost = SOCKS_HOST,
-                socksPort = socksPort,
-                mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
-                blockedPackagesProvider = { profile.blockedApps.toSet() },
-                routingEngine = RoutingEngine(emptyList()),
-            )
-            DiagnosticsLog.i(TAG, "Starting userspace filter bridge (blocked apps=${profile.blockedApps.size})")
-            bridge.start()
-            tunBridge = bridge
-            return
+    private suspend fun startTun2Socks(profile: ConnectionProfile, socksPort: Int) {
+        val context = currentCoroutineContext()
+        // cleanupNativeOnly() requests HEV stop asynchronously. Every path that
+        // starts a forwarder (including retry/ladder attempts) must wait for the
+        // old native pthread to exit. The helper rechecks under nativeLifecycleLock
+        // so a concurrent cleanup cannot slip a new stop request between the wait
+        // and this start.
+        val started = startAfterNativeWorkerStopped(
+            lifecycleLock = nativeLifecycleLock,
+            isActive = HevTunnel::isAlive,
+        ) {
+            context.ensureActive()
+            activeForwardPort = socksPort
+            if (profile.blockedApps.isNotEmpty()) {
+                // PER-APP BLOCKING (1.2.4): hev-socks5-tunnel cannot filter per
+                // UID, so a userspace filter bridge reads the TUN and drops
+                // blocked apps' packets. It must not overlap a draining HEV worker.
+                val pfd = tun ?: throw IllegalStateException("TUN descriptor is null")
+                val bridge = SocksTunBridge(
+                    vpnService = this,
+                    tunDescriptor = pfd,
+                    socksHost = SOCKS_HOST,
+                    socksPort = socksPort,
+                    mtu = profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
+                    blockedPackagesProvider = { profile.blockedApps.toSet() },
+                    routingEngine = RoutingEngine(emptyList()),
+                )
+                // Publish ownership before starting workers so teardown cannot miss
+                // a partially-started bridge; the lifecycle lock excludes teardown.
+                tunBridge = bridge
+                try {
+                    DiagnosticsLog.i(TAG, "Starting userspace filter bridge (blocked apps=${profile.blockedApps.size})")
+                    bridge.start()
+                    context.ensureActive()
+                } catch (failure: Throwable) {
+                    runCatching { bridge.stop() }
+                    if (tunBridge === bridge) tunBridge = null
+                    throw failure
+                }
+            } else {
+                val config = writeHevConfig(
+                    profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX),
+                    socksPort,
+                )
+                // HEV duplicates this descriptor in JNI and owns the duplicate
+                // until its native worker has fully returned.
+                val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
+                DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
+                tunnelStarted = true
+                try {
+                    HevTunnel.start(config.absolutePath, fd)
+                    context.ensureActive()
+                } catch (failure: Throwable) {
+                    runCatching { HevTunnel.stop() }
+                    tunnelStarted = false
+                    throw failure
+                }
+            }
         }
-        val config = writeHevConfig(profile.mtu.coerceIn(ConnectionProfile.MTU_MIN, ConnectionProfile.MTU_MAX), socksPort)
-        // Use the LIVE fd of the ParcelFileDescriptor (do NOT detach): hev uses it
-        // while running and we close the pfd ourselves on teardown. The fd is only
-        // valid inside THIS process, which is exactly why hev must run in-process.
-        val fd = tun?.fd ?: throw IllegalStateException("TUN descriptor is null")
-        DiagnosticsLog.i(TAG, "Starting hev-socks5-tunnel in-process (fd=$fd)")
-        HevTunnel.start(config.absolutePath, fd)
-        tunnelStarted = true
+        check(started) {
+            "Previous HEV worker did not exit; refusing to start an overlapping tunnel."
+        }
     }
 
     /**
@@ -2777,6 +2952,8 @@ class AetherVpnService : VpnService() {
         updateNotification(getString(R.string.state_disconnecting))
         val job = runJob
         runJob = null
+        val generation = stopGeneration.incrementAndGet()
+        val previousStop = stopJob
         // DISCONNECT MUST BE INSTANT. Order matters:
         //   1. cancel the session coroutine (does not wait for it),
         //   2. kill the natives right away — this is what actually makes the
@@ -2789,6 +2966,8 @@ class AetherVpnService : VpnService() {
         // left to run — up to a full minute.
         job?.cancel()
         stopJob = scope.launch(Dispatchers.IO) {
+            previousStop?.join()
+            if (generation != stopGeneration.get()) return@launch
             cleanupNativeOnly(reason)
             stopCustom()
             // STALE-CIRCLES FIX (part 2): clear the finished session's results
@@ -2801,18 +2980,20 @@ class AetherVpnService : VpnService() {
             // Back to the documented ports for the next session: a relocation is a
             // fact about one session's environment, not a setting.
             PortLease.reset()
-            AetherController.setState(ConnectionState.Idle)
-            AetherTileService.requestUpdate(this@AetherVpnService)
-            // ISSUE #20 / #23 ROOT CAUSE (1.3.1): the widget was repainted ONLY
-            // from updateNotification(), and this path does not call it - the
-            // notification is about to be dropped, not updated. So the last thing
-            // ever written to the widget was the "Disconnecting…" painted at the
-            // top of this method, and it stayed there forever: "when disconnect
-            // with widget it shows disconnecting .... always". The tile was
-            // already refreshed on the line above; the widget was simply missed.
-            AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
-            stopForegroundCompat()
-            stopSelf()
+            if (generation == stopGeneration.get()) {
+                AetherController.setState(ConnectionState.Idle)
+                AetherTileService.requestUpdate(this@AetherVpnService)
+                // ISSUE #20 / #23 ROOT CAUSE (1.3.1): the widget was repainted ONLY
+                // from updateNotification(), and this path does not call it - the
+                // notification is about to be dropped, not updated. So the last thing
+                // ever written to the widget was the "Disconnecting…" painted at the
+                // top of this method, and it stayed there forever: "when disconnect
+                // with widget it shows disconnecting .... always". The tile was
+                // already refreshed on the line above; the widget was simply missed.
+                AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
+                stopForegroundCompat()
+                stopSelf()
+            }
             job?.join()
         }
     }
@@ -2916,8 +3097,7 @@ class AetherVpnService : VpnService() {
             // 443 is the one port an exit cannot refuse without being useless.
             //
             // NO HOSTNAME VERIFICATION HERE, ON PURPOSE - do not "fix" this.
-            // Unlike the geolocation probes (NetProbe.tlsWrap) and the Gemini
-            // client (GeminiHttp.tlsWrap), which both verify, this handshake sends
+            // Unlike the geolocation probes (NetProbe.tlsWrap), this handshake sends
             // no request and trusts nothing that comes back: the only thing read
             // off it is "did bytes round-trip". Verifying the certificate would
             // make a captive portal or an interception proxy indistinguishable from
@@ -2964,22 +3144,62 @@ class AetherVpnService : VpnService() {
         val job = runJob
         runJob = null
         job?.cancel()
+        val generation = stopGeneration.incrementAndGet()
+        val previousStop = stopJob
         stopJob = scope.launch(Dispatchers.IO) {
+            previousStop?.join()
+            if (generation != stopGeneration.get()) return@launch
             cleanupForwardingOnly()
             stopCustom()
-            ensureLockdownTun(profile)
-            lockdownTunActive = true
-            Diagnostics.resetChecks()
-            EngineMeta.reset()
-            AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
-            updateNotification(getString(R.string.state_killswitch))
-            AetherTileService.requestUpdate(this@AetherVpnService)
+            val lockdownFailure = try {
+                ensureLockdownTun(profile)
+                null
+            } catch (e: Exception) {
+                e
+            }
+            if (generation == stopGeneration.get()) {
+                if (lockdownFailure == null) {
+                    lockdownTunActive = true
+                    Diagnostics.resetChecks()
+                    EngineMeta.reset()
+                    AetherController.setState(ConnectionState.Error(getString(R.string.state_killswitch)))
+                    updateNotification(getString(R.string.state_killswitch))
+                } else {
+                    lockdownTunActive = false
+                    val message = getString(R.string.state_killswitch_failed)
+                    DiagnosticsLog.e(
+                        TAG,
+                        "Kill switch TUN could not be established: ${lockdownFailure.javaClass.simpleName}: ${lockdownFailure.message}",
+                    )
+                    AetherController.setState(ConnectionState.Error(message))
+                    updateNotification(message)
+                }
+                AetherTileService.requestUpdate(this@AetherVpnService)
+                AetherWidgetProvider.updateAllWidgets(this@AetherVpnService)
+            }
             job?.join()
         }
     }
 
+    /**
+     * Retries teardown for Smart Plus probe engines. A failed reap must stay
+     * registered: dropping the last reference would strand its identity lease.
+     */
+    private fun stopTrackedRaceEngines() {
+        val snapshot = synchronized(raceEngines) { raceEngines.toList() }
+        snapshot.forEach { candidate ->
+            val stopped = runCatching { candidate.stop() }.getOrDefault(false)
+            if (stopped) {
+                raceEngines.remove(candidate)
+            } else {
+                DiagnosticsLog.e(TAG, "Smart Plus engine exit is unconfirmed; retaining it for a later cleanup retry.")
+            }
+        }
+    }
+
     /** Stops sharing, the forwarder and the engine but deliberately KEEPS [tun]. */
-    private fun cleanupForwardingOnly() {
+    private fun cleanupForwardingOnly() = synchronized(nativeLifecycleLock) {
+        stopTrackedRaceEngines()
         activeForwardPort = 0
         sessionExitPort = 0
         try {
@@ -3010,15 +3230,16 @@ class AetherVpnService : VpnService() {
             }
         } catch (_: Throwable) {
         }
-        try {
-            engine?.stop()
-        } catch (_: Throwable) {
+        val currentEngine = engine
+        if (currentEngine == null || runCatching { currentEngine.stop() }.getOrDefault(false)) {
+            engine = null
+        } else {
+            DiagnosticsLog.e(TAG, "Cleanup could not confirm engine exit; retaining its reference and identity lease.")
         }
-        engine = null
     }
 
     /** (Re)builds the TUN as a full-tunnel blackhole: routes everything, reads nothing. */
-    private fun ensureLockdownTun(profile: ConnectionProfile) {
+    private fun ensureLockdownTun(profile: ConnectionProfile) = synchronized(nativeLifecycleLock) {
         runCatching { tun?.close() }
         tun = null
         val builder = Builder()
@@ -3035,8 +3256,16 @@ class AetherVpnService : VpnService() {
         // is for: the tunnel is down, v4 is held, and v6 is not.
         builder.addAddress(TunnelConfig.TUN_IPV6, TunnelConfig.TUN_IPV6_PREFIX)
         builder.addRoute("::", 0)
-        tun = runCatching { builder.establish() }.getOrNull()
+        tun = requireLockdownTun(runCatching { builder.establish() }.getOrNull())
     }
+
+    /**
+     * Do not report lockdown active unless Android returned a live TUN descriptor.
+     * Kept separate so the failure contract can be regression-tested without an
+     * Android VPN stack or a real interface.
+     */
+    internal fun requireLockdownTun(descriptor: ParcelFileDescriptor?): ParcelFileDescriptor =
+        checkNotNull(descriptor) { "Android did not establish the kill-switch VPN interface" }
 
     /**
      * 1.6.0: every native teardown names its reason. The body is unchanged
@@ -3045,7 +3274,7 @@ class AetherVpnService : VpnService() {
      * enrichment cannot land on the next session. No default reason on purpose: a
      * new call site must say why it kills the natives.
      */
-    private fun cleanupNativeOnly(reason: String) {
+    private fun cleanupNativeOnly(reason: String) = synchronized(nativeLifecycleLock) {
         val newEpoch = sessionEpoch.incrementAndGet()
         runCatching {
             ChainTrace.stage(
@@ -3089,11 +3318,13 @@ class AetherVpnService : VpnService() {
             }
         } catch (_: Throwable) {
         }
-        try {
-            engine?.stop()
-        } catch (_: Throwable) {
+        stopTrackedRaceEngines()
+        val currentEngine = engine
+        if (currentEngine == null || runCatching { currentEngine.stop() }.getOrDefault(false)) {
+            engine = null
+        } else {
+            DiagnosticsLog.e(TAG, "Cleanup could not confirm engine exit; retaining its reference and identity lease.")
         }
-        engine = null
         try {
             tun?.close()
         } catch (_: Throwable) {
@@ -3161,9 +3392,19 @@ class AetherVpnService : VpnService() {
 
     override fun onDestroy() {
         if (live === this) live = null
-        runJob?.cancel()
-        cleanupNativeOnly("service-destroyed")
-        stopCustom()
+        // Invalidate pending stop/lockdown finalizers before synchronous teardown.
+        // Otherwise an older stopJob can race onDestroy and publish stale UI state
+        // after the service has already begun destruction.
+        stopGeneration.incrementAndGet()
+        val activeRun = runJob
+        runJob = null
+        activeRun?.cancel()
+        stopJob?.cancel()
+        stopJob = null
+        synchronized(nativeLifecycleLock) {
+            cleanupNativeOnly("service-destroyed")
+            stopCustom()
+        }
         // 1.3.1: the service can also die WITHOUT going through stopEverything -
         // task removal, a system kill, the user revoking VPN consent. Every one of
         // those left the widget showing whatever transient text it had last. The

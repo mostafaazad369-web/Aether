@@ -1,7 +1,5 @@
 package studio.cluvex.aether.ui.components
 
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -137,7 +135,6 @@ fun PresetSelector(
             ) {
                 Column(Modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        AiTopicIcon(AiTopic.PRESETS)
                     }
                     Column(Modifier.heightIn(max = if (presets.size > 2) 168.dp else 200.dp)
                         .verticalScroll(rememberScrollState())) {
@@ -240,7 +237,6 @@ private fun PresetNameDialog(initialName: String = "", renaming: Boolean = false
         onDismissRequest = onDismiss,
         title = { Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(if (renaming) R.string.cc_action_rename else R.string.preset_save_as_new), Modifier.weight(1f))
-            AiTopicIcon(AiTopic.PRESETS)
         } },
         text = {
             OutlinedTextField(

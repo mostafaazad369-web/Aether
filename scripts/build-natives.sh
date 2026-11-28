@@ -181,12 +181,12 @@ build_hev() {
     # Never ship stale artifacts from the old wrapper approach.
     rm -f "${JNI_DIR}/${abi}/libhev.so" "${JNI_DIR}/${abi}/libhevcore.so"
 
-    # ---- Hard verification: hev must export its STABLE public C API. ----
-    # We no longer use hev's bundled JNI layer (hev-jni.c) at all — see the
-    # root-cause note below. Only the C entry points matter, and those have
-    # been stable across hev releases for years.
+    # ---- Verify the pinned HEV API plus Aether's lifecycle extension. ----
+    # We no longer use hev's bundled JNI layer (hev-jni.c) at all. The
+    # generation-aware callback/quit entry points are added by our pinned,
+    # source-checked patch in fetch-natives.sh and are required below.
     dynsyms="$("${NDK_TOOLCHAIN}/llvm-nm" --dynamic --defined-only "${out}" 2>/dev/null || true)"
-    for sym in hev_socks5_tunnel_main hev_socks5_tunnel_quit hev_socks5_tunnel_stats; do
+    for sym in hev_socks5_tunnel_main hev_socks5_tunnel_main_with_ready_callback hev_socks5_tunnel_quit hev_socks5_tunnel_quit_generation hev_socks5_tunnel_stats; do
       if ! grep -qw "${sym}" <<<"${dynsyms}"; then
         echo "ERROR: [${abi}] libhev-socks5-tunnel.so lacks ${sym}." >&2
         exit 1
@@ -211,8 +211,9 @@ build_hev() {
     # died with "hev native library unavailable" (proxy mode never loads hev).
     #
     # PERMANENT FIX: ship our own tiny JNI bridge (scripts/aethertun-jni.c)
-    # linked against hev's stable public C API. -Wl,--no-undefined resolves
-    # those symbols at BUILD time, so any upstream break fails CI loudly
+    # linked against HEV's public C API plus Aether's pinned lifecycle extension.
+    # -Wl,--no-undefined resolves those symbols at BUILD time, so upstream or
+    # patch drift fails the build loudly
     # instead of shipping a broken APK. hev's JNI layer is stripped from the
     # build above AND the bridge defines its own JNI_OnLoad (ART finds
     # JNI_OnLoad via dlsym(), which also searches DT_NEEDED dependencies —
@@ -241,7 +242,8 @@ build_hev() {
       JNI_OnLoad \
       Java_studio_cluvex_aether_core_TProxyService_TProxyStartService \
       Java_studio_cluvex_aether_core_TProxyService_TProxyStopService \
-      Java_studio_cluvex_aether_core_TProxyService_TProxyGetStats; do
+      Java_studio_cluvex_aether_core_TProxyService_TProxyGetStats \
+      Java_studio_cluvex_aether_core_TProxyService_TProxyIsActive; do
       if ! grep -qw "${sym}" <<<"${bridgesyms}"; then
         echo "ERROR: [${abi}] libaethertun.so lacks ${sym} — Kotlin externals would not resolve." >&2
         exit 1
@@ -271,7 +273,7 @@ build_hev() {
           ;;
       esac
     done <<< "${needed}"
-    echo "    [${abi}] libhev-socks5-tunnel.so verified: stable C API (main/quit/stats) OK"
+    echo "    [${abi}] libhev-socks5-tunnel.so verified: patched lifecycle C API (main/ready/generation-quit/stats) OK"
     "${NDK_TOOLCHAIN}/llvm-readelf" -d "${out}" 2>/dev/null | grep NEEDED || true
   done
 }

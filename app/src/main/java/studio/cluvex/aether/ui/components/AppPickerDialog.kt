@@ -1,7 +1,5 @@
 package studio.cluvex.aether.ui.components
 
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.selection.toggleable
@@ -75,7 +73,6 @@ fun AppPickerDialog(
                     Text(text = stringResource(R.string.apps_dialog_title),
                         style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    AiTopicIcon(AiTopic.BLOCKED_APPS)
                 }
 
                 OutlinedTextField(

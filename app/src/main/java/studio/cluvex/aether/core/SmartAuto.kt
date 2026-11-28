@@ -107,7 +107,8 @@ data class AutoCandidate(
  *     (protocol + noize + fragment/ECH + the ranges that actually answered),
  *     most-likely-to-succeed first, plus a full-range last resort.
  *  4. The VpnService then walks the ladder: each candidate gets a real connect
- *     attempt gated by the 5-step self-test; the first one that passes wins.
+ *     attempt gated by the configured readiness policy (the 5-step self-test
+ *     when enabled); the first one that passes wins.
  *
  * Every probe result and every decision is written to the in-app log, so the
  * user can see exactly WHY Smart Auto picked what it picked.
@@ -309,9 +310,9 @@ object SmartAuto {
             )
         }
 
-        // Last resort: the top strategy again, but scanning the engine's FULL
-        // built-in ranges with the user's own scan mode — covers the rare case
-        // where the probe-narrowed ranges themselves were the problem.
+        // Last resort: repeat the top strategy with the user's original scan
+        // mode. AUTO endpoints expand back to the full built-in ranges; manually
+        // pinned peers/ranges remain untouched by design.
         val first = ladder.first()
         var fbProfile = first.profile.copy(scanMode = user.scanMode)
         if (!keepUserEndpoint) {
@@ -320,8 +321,9 @@ object SmartAuto {
         val fallback = AutoCandidate(
             fbProfile,
             fbProfile.connectTimeoutMs(),
-            "${fbProfile.protocol.name} · noize=${fbProfile.noize.name.lowercase()} · full built-in ranges " +
-                "· scan=${user.scanMode.name.lowercase()} (last resort)",
+            "${fbProfile.protocol.name} · noize=${fbProfile.noize.name.lowercase()} · " +
+                (if (keepUserEndpoint) "user-pinned endpoint" else "full built-in ranges") +
+                " · scan=${user.scanMode.name.lowercase()} (last resort)",
         )
 
         val plan = (ladder + fallback).distinctBy { it.profile }

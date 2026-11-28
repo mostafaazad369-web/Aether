@@ -6,12 +6,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import android.util.Log
-import studio.cluvex.aether.ai.AiSession
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.core.IdentityVault
 import studio.cluvex.aether.core.SignerIdentity
 import studio.cluvex.aether.data.LanguagePrefs
 import studio.cluvex.aether.data.ShareCredentials
+import studio.cluvex.aether.data.SecretStore
 import studio.cluvex.aether.vpn.AetherVpnService
 import java.io.File
 import kotlin.concurrent.thread
@@ -65,16 +65,20 @@ class AetherApp : Application() {
             // 1.5.0: unseal the saved custom configs once, so the settings row and
             // the first connect read them without touching the keystore again.
             runCatching { studio.cluvex.aether.custom.CustomConfigStore.load(this) }
+            // Retire the old assistant's encrypted key and preferences on upgrade.
+            // Other Keystore-backed credentials are intentionally preserved.
+            runCatching {
+                if (SecretStore(this).clearResult(LEGACY_GEMINI_SECRET) !is SecretStore.WriteResult.Cleared) {
+                    DiagnosticsLog.w("startup", "Legacy assistant credential cleanup incomplete")
+                }
+            }
+            runCatching {
+                val legacyPreferences = File(filesDir, "datastore/aether_ai.preferences_pb")
+                if (legacyPreferences.exists() && !legacyPreferences.delete()) {
+                    DiagnosticsLog.w("startup", "Legacy assistant preferences cleanup incomplete")
+                }
+            }
         }
-
-        // 1.2.9 AI: bind the AI store to the process, once.
-        //
-        // Here rather than in an Activity because the AI settings outlive any
-        // screen: the chat survives a back gesture, and the on-connect log analysis
-        // has to know whether it is switched on even when the app was started by
-        // the Quick Settings tile and no Activity was ever created. Attaching is
-        // idempotent and touches no network - it only opens a DataStore.
-        AiSession.attach(this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -169,6 +173,7 @@ class AetherApp : Application() {
     }
 
     companion object {
+        private const val LEGACY_GEMINI_SECRET = "gemini_api_key"
         const val CHANNEL_ID = "aether_vpn"
 
         /** Standalone crash report consumed by [CrashReportActivity]. */

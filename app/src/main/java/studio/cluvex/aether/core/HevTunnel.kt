@@ -6,19 +6,17 @@ package studio.cluvex.aether.core
  * hev MUST run inside the *same process* that owns the VpnService TUN file
  * descriptor (fds are per-process), and its event loop MUST run on a native
  * pthread — not a Java thread. TProxyStartService satisfies both: it returns
- * immediately after spawning hev's own native thread.
+ * once a native worker generation has been accepted, not when the tunnel is
+ * fully initialized. Native status remains authoritative until worker exit.
  *
  * See TProxyService.kt for the full root-cause history (custom-wrapper SIGSEGV
  * on ART-attached threads).
  */
 object HevTunnel {
-    @Volatile
-    private var running = false
-
     /** True if the native core is available to run. */
     fun isAvailable(): Boolean = TProxyService.available
 
-    /** Starts hev on its own native thread. No-op if already running. */
+    /** Starts hev on its own native thread. No-op if a generation is already accepted. */
     fun start(configPath: String, tunFd: Int) {
         if (!TProxyService.available) {
             val detail = TProxyService.loadFailure ?: "unknown loader error"
@@ -28,20 +26,31 @@ object HevTunnel {
             )
             throw IllegalStateException("hev native library unavailable: $detail")
         }
-        if (running) return
         DiagnosticsLog.i("tunnel", "hev-socks5-tunnel starting on native thread (fd=$tunFd)")
-        // Upstream's TProxyStartService now returns whether the tunnel really
-        // started (bad YAML config, invalid fd, …). Surface a hard failure
-        // instead of pretending the tunnel is up and "connecting" forever.
+        // JNI confirms that a worker generation was accepted. Configuration and
+        // tunnel initialization happen asynchronously on that native worker.
         val started = TProxyService.TProxyStartService(configPath, tunFd)
         if (!started) {
-            DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to start (config/fd rejected)")
+            DiagnosticsLog.e("tunnel", "hev-socks5-tunnel refused to accept a start request (worker unavailable or draining)")
             throw IllegalStateException("hev-socks5-tunnel failed to start")
         }
-        running = true
     }
 
-    fun isAlive(): Boolean = running
+    fun isAlive(): Boolean = TProxyService.available && TProxyService.TProxyIsActive()
+
+    /**
+     * Waits until the native worker has fully returned and released its duplicated
+     * TUN descriptor. A stop request is asynchronous; starting a replacement while
+     * the bridge is still STOP_REQUESTED is rejected by JNI.
+     *
+     * Returns false on timeout so callers fail closed rather than overlap workers.
+     */
+    suspend fun awaitStopped(timeoutMs: Long = 10_000L): Boolean {
+        if (!TProxyService.available) return true
+        return awaitNativeWorkerStopped(timeoutMs) {
+            TProxyService.TProxyIsActive()
+        }
+    }
 
     /**
      * Raw cumulative counters from hev's JNI, or null when the core isn't
@@ -49,7 +58,7 @@ object HevTunnel {
      * Prefer [traffic] over indexing this directly — it fixes the direction.
      */
     fun stats(): LongArray? {
-        if (!TProxyService.available || !running) return null
+        if (!TProxyService.available || !TProxyService.TProxyIsActive()) return null
         return runCatching { TProxyService.TProxyGetStats() }.getOrNull()
     }
 
@@ -88,16 +97,67 @@ object HevTunnel {
         )
     }
 
-    /** Requests hev to quit. Safe to call repeatedly. */
+    /** Requests a generation-scoped HEV stop. Safe to call repeatedly.
+     * The native worker owns a duplicate of the TUN fd until it has fully exited.
+     */
     fun stop() {
         if (!TProxyService.available) return
-        if (!running) return
         try {
             TProxyService.TProxyStopService()
             DiagnosticsLog.i("tunnel", "hev-socks5-tunnel stop requested")
         } catch (t: Throwable) {
             DiagnosticsLog.w("tunnel", "TProxyStopService failed: ${t.message}")
         }
-        running = false
     }
+}
+
+
+/**
+ * Polls the native lifecycle gate until its detached worker has completely exited.
+ * Kept independent of JNI so timeout and completion behavior can be JVM-tested.
+ */
+internal suspend fun awaitNativeWorkerStopped(
+    timeoutMs: Long,
+    isActive: () -> Boolean,
+): Boolean {
+    require(timeoutMs > 0L) { "timeoutMs must be positive" }
+    return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        while (isActive()) {
+            kotlinx.coroutines.delay(25L)
+        }
+        true
+    } ?: false
+}
+
+/**
+ * Waits for the previous native worker to exit, then rechecks under the same
+ * lifecycle lock used by start/stop before invoking [start]. A stop can win
+ * after the polling loop observes inactivity but before this caller acquires
+ * the lock; the in-lock recheck closes that gap. The callback must perform the
+ * complete start publication while holding [lifecycleLock].
+ */
+internal suspend fun startAfterNativeWorkerStopped(
+    timeoutMs: Long = 10_000L,
+    lifecycleLock: Any,
+    isActive: () -> Boolean,
+    start: () -> Unit,
+): Boolean {
+    require(timeoutMs > 0L) { "timeoutMs must be positive" }
+    return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        var started = false
+        while (!started) {
+            while (isActive()) {
+                kotlinx.coroutines.delay(25L)
+            }
+            started = synchronized(lifecycleLock) {
+                if (isActive()) {
+                    false
+                } else {
+                    start()
+                    true
+                }
+            }
+        }
+        true
+    } ?: false
 }

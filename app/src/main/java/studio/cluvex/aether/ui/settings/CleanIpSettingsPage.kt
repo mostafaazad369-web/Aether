@@ -13,8 +13,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import studio.cluvex.aether.ai.AiTopic
-import studio.cluvex.aether.ui.ai.AiTopicIcon
 import studio.cluvex.aether.R
 import studio.cluvex.aether.scanner.CleanIpScanManager
 import studio.cluvex.aether.scanner.CustomIpRanges
@@ -35,7 +33,7 @@ internal fun CleanIpSettingsPage(enabled: Boolean, onBack: () -> Unit, modifier:
     }
     SettingsScaffold(stringResource(R.string.cip_settings_title), onBack, modifier) {
         settingsSection {
-            GroupCaption(stringResource(R.string.cip_profile), aiTopic = AiTopic.CLEAN_IP_PROFILE)
+            GroupCaption(stringResource(R.string.cip_profile), )
             SettingsGroup {
                 Text(stringResource(R.string.cip_profiles_desc), Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodySmall)
@@ -61,11 +59,6 @@ internal fun CleanIpSettingsPage(enabled: Boolean, onBack: () -> Unit, modifier:
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        AiTopicIcon(when (profile) {
-                            ScanProfile.FAST -> AiTopic.CLEAN_IP_FAST
-                            ScanProfile.BALANCED -> AiTopic.CLEAN_IP_BALANCED
-                            ScanProfile.DEEP -> AiTopic.CLEAN_IP_DEEP
-                        })
                         Spacer(Modifier.width(8.dp))
                         RadioButton(selected = profile == options.profile, onClick = null, enabled = unlocked)
                     }
@@ -73,11 +66,11 @@ internal fun CleanIpSettingsPage(enabled: Boolean, onBack: () -> Unit, modifier:
             }
         }
         settingsSection {
-            GroupCaption(stringResource(R.string.cip_title), aiTopic = AiTopic.CLEAN_IP_SCANNER)
+            GroupCaption(stringResource(R.string.cip_title), )
             SettingsGroup {
                 SettingsSwitchRow(title = stringResource(R.string.cip_manual_ceiling),
                     summary = stringResource(R.string.cip_manual_desc), checked = options.manual,
-                    enabled = unlocked, aiTopic = AiTopic.CLEAN_IP_LIMIT,
+                    enabled = unlocked, 
                     onCheckedChange = { update(options.copy(manual = it)) })
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val valid = limit.toIntOrNull()?.let { it in 50..5000 } == true
@@ -95,11 +88,11 @@ internal fun CleanIpSettingsPage(enabled: Boolean, onBack: () -> Unit, modifier:
             }
         }
         settingsSection {
-            GroupCaption(stringResource(R.string.cip_custom_title), aiTopic = AiTopic.CLEAN_IP_SCANNER)
+            GroupCaption(stringResource(R.string.cip_custom_title), )
             SettingsGroup {
                 SettingsSwitchRow(title = stringResource(R.string.cip_custom_enable),
                     summary = stringResource(R.string.cip_custom_desc), checked = options.customEnabled,
-                    enabled = unlocked, aiTopic = AiTopic.CLEAN_IP_SCANNER,
+                    enabled = unlocked, 
                     onCheckedChange = { update(options.copy(customEnabled = it)) })
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val parsed = remember(rangesText) { CustomIpRanges.parse(rangesText) }

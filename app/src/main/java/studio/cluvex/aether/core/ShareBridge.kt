@@ -18,6 +18,7 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -172,9 +173,56 @@ object ShareBridge {
     /** r6: the SOCKS5 + HTTP listener pair bound on one share interface. */
     private class LanListener(val target: LanTarget, val socks: ServerSocket, val http: ServerSocket) {
         fun close() {
-            runCatching { socks.close() }
-            runCatching { http.close() }
+            closeOwnedResources(
+                "LAN listener close failed",
+                listOf({ socks.close() }, { http.close() }),
+            )
         }
+    }
+
+    /** Accepted client ownership is tied to the listener session and closed on teardown. */
+    internal class ActiveClient(val socket: Socket, val viaAddress: InetAddress?) {
+        /** Guarded by ShareBridge's monitor; includes every upstream TCP leg. */
+        val upstreams = linkedSetOf<Socket>()
+        /** Guarded by ShareBridge's monitor; UDP receive workers own these too. */
+        val datagrams = linkedSetOf<DatagramSocket>()
+        private val closed = AtomicBoolean(false)
+
+        fun close() {
+            if (!closed.compareAndSet(false, true)) return
+            val closeActions = buildList<() -> Unit> {
+                upstreams.toList().forEach { upstream -> add { upstream.close() } }
+                datagrams.toList().forEach { datagram -> add { datagram.close() } }
+                add { socket.close() }
+            }
+            closeOwnedResources("Active client close failed", closeActions)
+        }
+    }
+
+    /**
+     * Attempt every close even after one fails, then surface an aggregate failure.
+     * Callers must propagate this failure and refuse fixed-endpoint replacement.
+     */
+    private fun closeOwnedResources(message: String, closeActions: List<() -> Unit>) {
+        if (!closeOwnedResourcesResult(message, closeActions)) {
+            throw IllegalStateException(message)
+        }
+    }
+
+    private fun closeOwnedResourcesResult(message: String, closeActions: List<() -> Unit>): Boolean {
+        var failure: Throwable? = null
+        closeActions.forEach { close ->
+            try {
+                close()
+            } catch (error: Throwable) {
+                if (failure == null) failure = error else failure?.addSuppressed(error)
+            }
+        }
+        failure?.let {
+            DiagnosticsLog.e(TAG, "$message: $it")
+            return false
+        }
+        return true
     }
 
     private val _active = MutableStateFlow(false)
@@ -243,7 +291,9 @@ object ShareBridge {
     private var loSocks: ServerSocket? = null
     private var loHttp: ServerSocket? = null
     /** r6: one listener pair PER share interface. Guarded by the object lock. */
-    private val lanListeners = mutableListOf<LanListener>()
+    private val lanListeners = ShareListenerRegistry<LanListener> { it.close() }
+    /** Guarded by this object's monitor; includes clients currently inside handlers. */
+    private val activeClients = ShareListenerRegistry<ActiveClient> { it.close() }
 
     /** Immutable snapshot of the bound share interfaces, for lock-free admission. */
     @Volatile
@@ -281,6 +331,20 @@ object ShareBridge {
     private var session = 0
     private var watcherSession = -1
 
+    /** Once an owned close fails, fixed-port replacement is forbidden for this process. */
+    private var closeFailureLatched = false
+
+    /**
+     * Orders public start/stop requests at API-entry time, before their worker
+     * threads are scheduled. A queued start from an older generation must not
+     * resurrect listeners after a newer stop request.
+     */
+    private val commandGeneration = ShareCommandGeneration()
+    /** Orders LAN enable/disable intent independently from bridge start/stop. */
+    private val lanRequestGeneration = ShareCommandGeneration()
+    /** Coalesces mode/engine-route refresh workers without cancelling LAN intent. */
+    private val lanConfigGeneration = ShareCommandGeneration()
+
     /** Loopback SOCKS5 port every shared connection is relayed INTO. */
     @Volatile
     private var upstreamPort = PortLease.socks
@@ -294,7 +358,10 @@ object ShareBridge {
      * exposure has to be asked for.
      */
     fun start(localOnly: Boolean = true, upstreamPort: Int? = null) {
-        thread(name = "share-start", isDaemon = true) { startSync(localOnly, upstreamPort) }
+        val generation = commandGeneration.reserve()
+        thread(name = "share-start", isDaemon = true) {
+            startSyncForGeneration(localOnly, upstreamPort, generation)
+        }
     }
 
     /**
@@ -305,7 +372,27 @@ object ShareBridge {
      * @param upstreamPort loopback SOCKS5 port to relay into; null keeps what the
      *   running session configured (the UI toggle must never retarget a chain).
      */
-    fun startSync(localOnly: Boolean = true, upstreamPort: Int? = null): Boolean = synchronized(this) {
+    fun startSync(localOnly: Boolean = true, upstreamPort: Int? = null): Boolean {
+        val generation = commandGeneration.reserve()
+        return startSyncForGeneration(localOnly, upstreamPort, generation)
+    }
+
+    /**
+     * Executes only if no newer public start/stop request has superseded this
+     * command while it was waiting for its worker thread or the object monitor.
+     */
+    private fun startSyncForGeneration(
+        localOnly: Boolean,
+        upstreamPort: Int?,
+        generation: Long,
+        expectedLanRequestGeneration: Long? = null,
+    ): Boolean = synchronized(this) {
+        if (!commandGeneration.isCurrent(generation)) return@synchronized false
+        // An inactive enableLan() queues bridge startup. A later disableLan()
+        // must invalidate that startup without cancelling ordinary loopback starts.
+        if (expectedLanRequestGeneration != null &&
+            !lanRequestGeneration.isCurrent(expectedLanRequestGeneration)
+        ) return@synchronized false
         if (upstreamPort != null) this.upstreamPort = upstreamPort
         lanRequested = !localOnly
 
@@ -314,19 +401,23 @@ object ShareBridge {
                 ensureLanLocked()
                 startWatcherLocked()
             } else {
-                closeLanLocked()
+                val closed = closeLanLocked()
                 _lanStatus.value = LanStatus.OFF
+                return@synchronized closed
             }
-            return@synchronized true
+            return@synchronized !closeFailureLatched
         }
 
         session++
-        closeAllLocked()
+        if (!closeAllLocked() || closeFailureLatched) {
+            _active.value = false
+            _lanStatus.value = LanStatus.PORT_BUSY
+            return@synchronized false
+        }
         uploadBytesCounter.set(0L)
         downloadBytesCounter.set(0L)
-        liveConnections.set(0)
-        liveLanClients.set(0)
-        _lanClients.value = 0
+        // liveLanClients is process-wide: old-session handlers may still be
+        // unwinding, so never reset its published value at a new-session boundary.
         refusals.set(0L)
         lanClientSeen = false
         idleHintLogged = false
@@ -348,8 +439,8 @@ object ShareBridge {
         }
         _socksPort.value = loSocks?.localPort
         _httpPort.value = loHttp?.localPort
-        loSocks?.let { acceptLoop("share-socks-lo", it, via = null) { c -> serveSocksClient(c) } }
-        loHttp?.let { acceptLoop("share-http-lo", it, via = null) { c -> serveHttpClient(c) } }
+        loSocks?.let { acceptLoop("share-socks-lo", it, via = null, listenerSession = session) { c -> serveSocksClient(c) } }
+        loHttp?.let { acceptLoop("share-http-lo", it, via = null, listenerSession = session) { c -> serveHttpClient(c) } }
         _active.value = true
         DiagnosticsLog.i(TAG, "Proxy bridge ON - SOCKS5 :$SOCKS_SHARE_PORT + HTTP :$HTTP_SHARE_PORT (loopback)")
 
@@ -364,13 +455,24 @@ object ShareBridge {
 
     /** Turn everything off. Safe from any thread. */
     fun stop() {
-        _active.value = false
-        lanRequested = false
-        _lanStatus.value = LanStatus.OFF
-        val stopSession = synchronized(this) { ++session }
+        // Reserve synchronously: a start worker that has not entered its
+        // critical section yet becomes stale immediately, not when stop's
+        // background cleanup thread eventually runs.
+        val generation = commandGeneration.reserve()
+        val stopSession = synchronized(this) {
+            // A newer start may have superseded this stop while it waited for
+            // the monitor. In that case this stop must not mutate the new run.
+            if (!commandGeneration.isCurrent(generation)) return
+            lanRequestGeneration.reserve()
+            lanConfigGeneration.reserve()
+            _active.value = false
+            lanRequested = false
+            _lanStatus.value = LanStatus.OFF
+            ++session
+        }
         thread(name = "share-stop", isDaemon = true) {
             synchronized(this) {
-                if (session == stopSession) {
+                if (commandGeneration.isCurrent(generation) && session == stopSession) {
                     val had = loSocks != null || lanListeners.isNotEmpty()
                     closeAllLocked()
                     if (had) DiagnosticsLog.i(TAG, "Sharing OFF")
@@ -384,14 +486,28 @@ object ShareBridge {
      * Used by the Share card's switch.
      */
     fun enableLan() {
-        lanRequested = true
-        if (!_active.value) {
-            start(localOnly = false)
+        val (generation, startGeneration) = synchronized(this) {
+            lanRequested = true
+            val requestGeneration = lanRequestGeneration.reserve()
+            val pendingStart = if (_active.value) null else commandGeneration.reserve()
+            requestGeneration to pendingStart
+        }
+        if (startGeneration != null) {
+            thread(name = "share-lan-start", isDaemon = true) {
+                startSyncForGeneration(
+                    localOnly = false,
+                    upstreamPort = null,
+                    generation = startGeneration,
+                    expectedLanRequestGeneration = generation,
+                )
+            }
             return
         }
         thread(name = "share-lan-on", isDaemon = true) {
             synchronized(this) {
-                if (!_active.value) return@thread
+                if (!lanRequestGeneration.isCurrent(generation) || !_active.value || !lanRequested) {
+                    return@thread
+                }
                 ensureLanLocked()
                 startWatcherLocked()
             }
@@ -403,10 +519,14 @@ object ShareBridge {
      * needs them - r4 stopped the whole bridge here and broke proxy mode).
      */
     fun disableLan() {
-        lanRequested = false
-        _lanStatus.value = LanStatus.OFF
+        val generation = synchronized(this) {
+            lanRequested = false
+            _lanStatus.value = LanStatus.OFF
+            lanRequestGeneration.reserve()
+        }
         thread(name = "share-lan-off", isDaemon = true) {
             synchronized(this) {
+                if (!lanRequestGeneration.isCurrent(generation) || lanRequested) return@thread
                 val had = lanListeners.isNotEmpty()
                 closeLanLocked()
                 if (had) DiagnosticsLog.i(TAG, "LAN sharing OFF (loopback proxy kept)")
@@ -416,11 +536,18 @@ object ShareBridge {
 
     /** Switches between Home Wi-Fi and Mobile-data hotspot sharing. */
     fun setMode(mode: ShareLeakGuard.Mode) {
-        if (_mode.value == mode) return
-        _mode.value = mode
+        val generation = synchronized(this) {
+            if (_mode.value == mode) return
+            _mode.value = mode
+            lanConfigGeneration.reserve()
+        }
         if (!_active.value || !lanRequested) return
         thread(name = "share-mode", isDaemon = true) {
-            synchronized(this) { if (_active.value) ensureLanLocked() }
+            synchronized(this) {
+                if (lanConfigGeneration.isCurrent(generation) && _active.value && lanRequested) {
+                    ensureLanLocked()
+                }
+            }
         }
     }
 
@@ -459,7 +586,10 @@ object ShareBridge {
      * it can route anything directly, LAN clients are refused (zero leak).
      */
     fun noteEngineRoutes(directRulesActive: Boolean) {
-        engineDirectRoutes = directRulesActive
+        val generation = synchronized(this) {
+            engineDirectRoutes = directRulesActive
+            lanConfigGeneration.reserve()
+        }
         if (directRulesActive) {
             DiagnosticsLog.w(
                 TAG,
@@ -469,7 +599,11 @@ object ShareBridge {
         }
         if (_active.value && lanRequested) {
             thread(name = "share-routes", isDaemon = true) {
-                synchronized(this) { if (_active.value) ensureLanLocked() }
+                synchronized(this) {
+                    if (lanConfigGeneration.isCurrent(generation) && _active.value && lanRequested) {
+                        ensureLanLocked()
+                    }
+                }
             }
         }
     }
@@ -490,6 +624,10 @@ object ShareBridge {
      * network. Caller holds the lock. Idempotent - the watcher calls it often.
      */
     private fun ensureLanLocked() {
+        if (closeFailureLatched) {
+            _lanStatus.value = LanStatus.PORT_BUSY
+            return
+        }
         if (!lanRequested) {
             closeLanLocked()
             _lanStatus.value = LanStatus.OFF
@@ -511,16 +649,26 @@ object ShareBridge {
         // r6: follow the SET of share interfaces, not one. Close what is gone or
         // dead, bind what is new, keep what still works (its clients stay up).
         var changed = false
-        val iterator = lanListeners.iterator()
-        while (iterator.hasNext()) {
-            val listener = iterator.next()
-            val stillWanted = targets.any { it.address == listener.target.address }
-            if (!stillWanted || listener.socks.isClosed || listener.http.isClosed) {
-                listener.close()
-                iterator.remove()
-                changed = true
-            }
+        val previousListenerCount = lanListeners.snapshot().size
+        val obsoleteListeners = lanListeners.detachWhere { listener ->
+            targets.any { it.address == listener.target.address } &&
+                !listener.socks.isClosed && !listener.http.isClosed
         }
+        val obsoleteClients = activeClients.detachWhere { client ->
+            client.viaAddress == null || targets.any { it.address == client.viaAddress }
+        }
+        val listenersClosed = obsoleteListeners.close()
+        val clientsClosed = obsoleteClients.close()
+        if (!listenersClosed || !clientsClosed) {
+            closeFailureLatched = true
+            lanTargets = emptyList()
+            _lanEndpoint.value = null
+            _lanEndpoints.value = emptyList()
+            _lanStatus.value = LanStatus.PORT_BUSY
+            DiagnosticsLog.e(TAG, "LAN teardown failed; replacement binds are disabled for this process")
+            return
+        }
+        if (lanListeners.snapshot().size != previousListenerCount) changed = true
         if (_authRequired.value && _proxyPassword.value.isBlank()) {
             _proxyPassword.value = LanGuard.randomPassword()
         }
@@ -532,14 +680,28 @@ object ShareBridge {
             val socks = bindWithRetry("SOCKS5 $label", host, SOCKS_SHARE_PORT, attempts = 4)
             val http = if (socks != null) bindWithRetry("HTTP $label", host, HTTP_SHARE_PORT, attempts = 4) else null
             if (socks == null || http == null) {
-                runCatching { socks?.close() }
-                runCatching { http?.close() }
+                val partialBindClosed = closeOwnedResourcesResult(
+                    "Partial LAN listener bind cleanup failed",
+                    listOf({ socks?.close() }, { http?.close() }),
+                )
+                if (!partialBindClosed) {
+                    closeFailureLatched = true
+                    lanTargets = emptyList()
+                    _lanEndpoint.value = null
+                    _lanEndpoints.value = emptyList()
+                    _lanStatus.value = LanStatus.PORT_BUSY
+                    DiagnosticsLog.e(
+                        TAG,
+                        "Partial LAN bind cleanup failed; replacement binds are disabled for this process",
+                    )
+                    return
+                }
                 busy++
                 continue
             }
-            lanListeners += LanListener(target, socks, http)
-            acceptLoop("share-socks-lan", socks, via = target) { c -> serveSocksClient(c) }
-            acceptLoop("share-http-lan", http, via = target) { c -> serveHttpClient(c) }
+            lanListeners.add(LanListener(target, socks, http))
+            acceptLoop("share-socks-lan", socks, via = target, listenerSession = session) { c -> serveSocksClient(c) }
+            acceptLoop("share-http-lan", http, via = target, listenerSession = session) { c -> serveHttpClient(c) }
             changed = true
         }
 
@@ -556,7 +718,7 @@ object ShareBridge {
         lanListeners.sortBy { listener ->
             order.indexOf(listener.target.address).let { if (it < 0) Int.MAX_VALUE else it }
         }
-        lanTargets = lanListeners.map { it.target }
+        lanTargets = lanListeners.snapshot().map { it.target }
         val endpoints = lanTargets.map {
             LanEndpoint(
                 address = it.address.hostAddress.orEmpty().substringBefore('%'),
@@ -739,28 +901,49 @@ object ShareBridge {
         )
     }
 
-    private fun closeLanLocked() {
-        lanListeners.forEach { it.close() }
-        lanListeners.clear()
+    private fun closeLanLocked(): Boolean {
+        val listenersClosed = lanListeners.detachAll().close()
+        val lanClientsClosed = activeClients.detachWhere { it.viaAddress == null }.close()
         lanTargets = emptyList()
         _lanEndpoint.value = null
         _lanEndpoints.value = emptyList()
+        val succeeded = listenersClosed && lanClientsClosed
+        if (!succeeded) {
+            closeFailureLatched = true
+            DiagnosticsLog.e(TAG, "LAN resource close failed; replacement binds are disabled for this process")
+        }
+        return succeeded
     }
 
-    private fun closeAllLocked() {
-        closeLanLocked()
-        runCatching { loSocks?.close() }
+    private fun closeAllLocked(): Boolean {
+        val lanClosed = closeLanLocked()
+        val clientsClosed = activeClients.detachAll().close()
+        val loopbackClosed = closeOwnedResourcesResult(
+            "Loopback listener close failed",
+            listOf({ loSocks?.close() }, { loHttp?.close() }),
+        )
         loSocks = null
-        runCatching { loHttp?.close() }
         loHttp = null
         _socksPort.value = null
         _httpPort.value = null
+        val succeeded = lanClosed && clientsClosed && loopbackClosed
+        if (!succeeded) {
+            closeFailureLatched = true
+            DiagnosticsLog.e(TAG, "Share teardown failed; fixed-port replacement is disabled for this process")
+        }
+        return succeeded
     }
 
     // ============================================================ admission
 
     /** [via] is the share interface a LAN listener is bound on; null = loopback. */
-    private fun acceptLoop(name: String, server: ServerSocket, via: LanTarget?, handler: (Socket) -> Unit) {
+    private fun acceptLoop(
+        name: String,
+        server: ServerSocket,
+        via: LanTarget?,
+        listenerSession: Long,
+        handler: (Socket) -> Unit,
+    ) {
         thread(name = name, isDaemon = true) {
             while (!server.isClosed) {
                 val client = try {
@@ -768,22 +951,74 @@ object ShareBridge {
                 } catch (_: Exception) {
                     break
                 }
-                if (!admit(client, via)) {
+
+                // Registration and the stop/session check share the bridge monitor.
+                // Thus stop either sees and closes this accepted socket, or wins first
+                // and makes this accept-loop generation reject it before handoff.
+                val registered = synchronized(this) {
+                    if (session != listenerSession || server.isClosed || !_active.value ||
+                        (via != null && !lanRequested)
+                    ) {
+                        false
+                    } else if (!admit(client, via)) {
+                        false
+                    } else {
+                        activeClients.add(ActiveClient(client, via?.address))
+                        true
+                    }
+                }
+                if (!registered) {
                     runCatching { client.close() }
                     continue
                 }
-                thread(name = "$name-conn", isDaemon = true) {
-                    try {
-                        client.tcpNoDelay = true
-                        handler(client)
-                    } catch (_: Exception) {
-                        // Per-connection errors are non-fatal by design.
-                    } finally {
+
+                val admissionRelease = ShareConnectionRelease {
+                    // Detach ownership and publish counters under the bridge monitor,
+                    // but never invoke ActiveClient.close() while holding that monitor.
+                    // If teardown already detached this client, its close batch owns
+                    // the close; otherwise this release batch owns it.
+                    val releaseBatch = synchronized(this) {
+                        val detached = activeClients.detachWhere { it.socket !== client }
                         liveConnections.decrementAndGet()
-                        if (via != null) _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
-                        runCatching { client.close() }
+                        if (via != null) {
+                            _lanClients.value = liveLanClients.decrementAndGet().coerceAtLeast(0)
+                        }
+                        detached
                     }
+                    releaseBatch.close()
                 }
+                ShareConnectionDispatcher.dispatch(
+                    startWorker = {
+                        ShareConnectionHandoff.startIfCurrent(
+                            lock = this,
+                            isCurrent = {
+                                session == listenerSession &&
+                                    _active.value &&
+                                    (via == null || lanRequested) &&
+                                    activeClients.any { it.socket === client }
+                            },
+                            startWorker = {
+                                Thread({
+                                    try {
+                                        client.tcpNoDelay = true
+                                        handler(client)
+                                    } catch (_: Exception) {
+                                        // Per-connection errors are non-fatal by design.
+                                    } finally {
+                                        admissionRelease.release()
+                                    }
+                                }, "$name-conn").apply {
+                                    isDaemon = true
+                                    start()
+                                }
+                            },
+                        )
+                    },
+                    onFailure = {
+                        // Share the same idempotent release with worker-finally.
+                        admissionRelease.release()
+                    },
+                )
             }
         }
     }
@@ -816,11 +1051,10 @@ object ShareBridge {
                 return false
             }
         }
-        if (liveConnections.get() >= MAX_LIVE_CONNECTIONS) {
+        if (!ShareConnectionCapacity.tryAcquire(liveConnections, MAX_LIVE_CONNECTIONS)) {
             noteRefusal("the $MAX_LIVE_CONNECTIONS simultaneous-connection limit")
             return false
         }
-        liveConnections.incrementAndGet()
         if (via != null) {
             _lanClients.value = liveLanClients.incrementAndGet()
             if (!lanClientSeen) {
@@ -875,7 +1109,7 @@ object ShareBridge {
                     return
                 }
                 client.soTimeout = 0
-                val upstream = dialUpstreamGreeted() ?: run {
+                val upstream = dialUpstreamGreeted(client) ?: run {
                     out.write(socksReply(SOCKS_REP_GENERAL_FAILURE))
                     out.flush()
                     return
@@ -996,13 +1230,16 @@ object ShareBridge {
      */
     private fun serveUdpAssociate(client: Socket, request: SocksRequest) {
         val out = client.getOutputStream()
-        val upstream = dialUpstreamGreeted() ?: run {
+        val upstream = dialUpstreamGreeted(client) ?: run {
             out.write(socksReply(SOCKS_REP_GENERAL_FAILURE))
             out.flush()
             return
         }
         var clientSide: DatagramSocket? = null
         var upstreamSide: DatagramSocket? = null
+        var upWorker: Thread? = null
+        var downWorker: Thread? = null
+        var upstreamWatchWorker: Thread? = null
         try {
             // Ask the upstream for ITS relay. DST 0.0.0.0:0 - the upstream sees
             // our loopback datagram socket, not the LAN client.
@@ -1050,8 +1287,16 @@ object ShareBridge {
             val shareAddr = client.localAddress
             val cs = DatagramSocket(InetSocketAddress(shareAddr, 0))
             clientSide = cs
+            if (!registerDatagram(client, cs)) {
+                runCatching { cs.close() }
+                return
+            }
             val us = DatagramSocket(InetSocketAddress(InetAddress.getByName(LOOPBACK), 0))
             upstreamSide = us
+            if (!registerDatagram(client, us)) {
+                runCatching { us.close() }
+                return
+            }
 
             // Tell the client where to send its datagrams.
             out.write(socksReplyBound(shareAddr, cs.localPort))
@@ -1065,7 +1310,7 @@ object ShareBridge {
             )
 
             // client -> tunnel
-            val up = thread(name = "share-udp-up", isDaemon = true) {
+            upWorker = thread(name = "share-udp-up", isDaemon = true) {
                 val buf = ByteArray(MAX_UDP_DATAGRAM)
                 val packet = DatagramPacket(buf, buf.size)
                 try {
@@ -1103,7 +1348,7 @@ object ShareBridge {
                 }
             }
             // tunnel -> client
-            val down = thread(name = "share-udp-down", isDaemon = true) {
+            downWorker = thread(name = "share-udp-down", isDaemon = true) {
                 val buf = ByteArray(MAX_UDP_DATAGRAM)
                 val packet = DatagramPacket(buf, buf.size)
                 try {
@@ -1120,28 +1365,34 @@ object ShareBridge {
             }
 
             // The association ends when EITHER control connection ends.
-            val upstreamWatch = thread(name = "share-udp-ctl", isDaemon = true) {
+            upstreamWatchWorker = thread(name = "share-udp-ctl", isDaemon = true) {
                 runCatching { while (upIn.read() >= 0) { /* drain */ } }
                 runCatching { client.shutdownInput() }
             }
             runCatching { while (client.getInputStream().read() >= 0) { /* drain */ } }
-            runCatching { cs.close() }
-            runCatching { us.close() }
-            runCatching { upstream.close() }
-            runCatching { up.join(1_000) }
-            runCatching { down.join(1_000) }
-            runCatching { upstreamWatch.join(1_000) }
         } catch (_: Exception) {
         } finally {
+            // Close receive endpoints before joining: DatagramSocket.close()
+            // releases threads blocked in receive(), including exceptional setup paths.
             runCatching { clientSide?.close() }
             runCatching { upstreamSide?.close() }
             runCatching { upstream.close() }
+            listOfNotNull(upWorker, downWorker, upstreamWatchWorker).forEach {
+                runCatching { it.join(1_000) }
+                if (it.isAlive) {
+                    DiagnosticsLog.w(TAG, "A UDP association worker did not exit within the teardown wait.")
+                }
+            }
         }
     }
 
     /** Loopback client: byte-for-byte relay into the upstream SOCKS5 (unchanged). */
     private fun relayToLocalSocks(client: Socket) {
         val upstream = Socket()
+        if (!registerUpstream(client, upstream)) {
+            runCatching { upstream.close() }
+            return
+        }
         try {
             upstream.tcpNoDelay = true
             upstream.connect(InetSocketAddress(TunnelConfig.SOCKS_HOST, upstreamPort), DIAL_TIMEOUT_MS)
@@ -1151,14 +1402,38 @@ object ShareBridge {
         }
     }
 
+    /** Register a UDP endpoint under the same client/session ownership as its TCP control socket. */
+    private fun registerDatagram(client: Socket, datagram: DatagramSocket): Boolean = synchronized(this) {
+        val owner = activeClients.snapshot().firstOrNull { it.socket === client } ?: return@synchronized false
+        if (client.isClosed) return@synchronized false
+        owner.datagrams.add(datagram)
+        true
+    }
+
+    /**
+     * Register an upstream socket before connect/handshake. If teardown already
+     * removed the client, reject and close the new socket instead of letting a
+     * stale handler create an unowned tunnel leg.
+     */
+    private fun registerUpstream(client: Socket, upstream: Socket): Boolean = synchronized(this) {
+        val owner = activeClients.snapshot().firstOrNull { it.socket === client } ?: return@synchronized false
+        if (client.isClosed) return@synchronized false
+        owner.upstreams.add(upstream)
+        true
+    }
+
     /**
      * Opens a connection to the upstream SOCKS5 and completes its no-auth
      * greeting. The upstream is ALWAYS a loopback address - asserted, because
      * "the bridge never dials the internet itself" is the zero-leak invariant.
      */
-    private fun dialUpstreamGreeted(): Socket? {
+    private fun dialUpstreamGreeted(client: Socket): Socket? {
         val host = TunnelConfig.SOCKS_HOST
         val socket = Socket()
+        if (!registerUpstream(client, socket)) {
+            runCatching { socket.close() }
+            return null
+        }
         return try {
             val address = InetAddress.getByName(host)
             check(address.isLoopbackAddress) { "upstream must be loopback" }
@@ -1261,7 +1536,7 @@ object ShareBridge {
                 out.writeAscii("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 return
             }
-            val upstream = socksOpen(host, port) ?: run {
+            val upstream = socksOpen(client, host, port) ?: run {
                 out.writeAscii("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 return
             }
@@ -1295,7 +1570,7 @@ object ShareBridge {
             out.writeAscii("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             return
         }
-        val upstream = socksOpen(host, port) ?: run {
+        val upstream = socksOpen(client, host, port) ?: run {
             out.writeAscii("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
             return
         }
@@ -1467,8 +1742,8 @@ object ShareBridge {
     }
 
     /** Opens a TCP stream to host:port THROUGH the upstream SOCKS5 (name -> tunnel DNS). */
-    private fun socksOpen(host: String, port: Int): Socket? {
-        val socket = dialUpstreamGreeted() ?: return null
+    private fun socksOpen(client: Socket, host: String, port: Int): Socket? {
+        val socket = dialUpstreamGreeted(client) ?: return null
         return try {
             socket.soTimeout = 30_000
             val out = socket.getOutputStream()
@@ -1532,28 +1807,20 @@ object ShareBridge {
 
     /** Full-duplex pipe; every byte feeds the session traffic counters. */
     private fun relay(client: Socket, upstream: Socket) {
-        val reverse = thread(isDaemon = true) { pipe(upstream, client, downloadBytesCounter) }
+        val reverse = thread(name = "share-tcp-down", isDaemon = true) {
+            pipe(upstream, client, downloadBytesCounter)
+        }
         pipe(client, upstream, uploadBytesCounter)
-        runCatching { reverse.join(1_000) }
+        // Keep the handler alive until the reverse half also reaches EOF.
+        // Interruption closes both owned endpoints to release a blocked socket read.
+        ShareSocketRelay.joinUntilFinished(reverse) {
+            runCatching { client.close() }
+            runCatching { upstream.close() }
+        }
     }
 
     private fun pipe(from: Socket, to: Socket, counter: AtomicLong) {
-        val buffer = ByteArray(16 * 1024)
-        try {
-            val input = from.getInputStream()
-            val output = to.getOutputStream()
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                output.write(buffer, 0, n)
-                output.flush()
-                counter.addAndGet(n.toLong())
-            }
-        } catch (_: Exception) {
-        } finally {
-            runCatching { to.shutdownOutput() }
-            runCatching { from.shutdownInput() }
-        }
+        ShareSocketRelay.pipe(from, to, counter)
     }
 
     private fun InputStream.readExact(n: Int): ByteArray? {
@@ -1584,4 +1851,15 @@ object ShareBridge {
 
     /** Default username; the real one comes from [setCredentials]. */
     const val DEFAULT_USER = "aether"
+}
+/**
+ * Small JVM-testable ordering primitive for asynchronous bridge commands.
+ * Generation reservation is deliberately synchronous at API entry.
+ */
+internal class ShareCommandGeneration {
+    private val current = AtomicLong(0L)
+
+    fun reserve(): Long = current.incrementAndGet()
+
+    fun isCurrent(generation: Long): Boolean = current.get() == generation
 }

@@ -23,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -93,8 +94,11 @@ import studio.cluvex.aether.model.TransportBackend
 import studio.cluvex.aether.core.NetProbe
 import studio.cluvex.aether.core.PingMonitor
 import studio.cluvex.aether.core.ShareBridge
+import studio.cluvex.aether.ui.theme.AetherAmber
+import studio.cluvex.aether.ui.theme.AetherError
 import studio.cluvex.aether.ui.theme.AetherGlowCyan
 import studio.cluvex.aether.ui.theme.AetherMint
+import studio.cluvex.aether.ui.theme.AetherViolet
 import studio.cluvex.aether.ui.theme.CardSubSurface
 import studio.cluvex.aether.ui.theme.CardSurfaceBottom
 import studio.cluvex.aether.ui.theme.CardSurfaceTop
@@ -142,7 +146,7 @@ import studio.cluvex.aether.ui.theme.CardTextPrimary
  * surface from the user's wallpaper - a purple or brown wallpaper turned this
  * card into something that no longer looked like Aether. The card is pinned to
  * the brand palette instead: deep navy background (#0A0E1A), mint accent
- * (#3EDBB0), one slate glass surface for everything inside it.
+ * (AetherMint), one slate glass surface for everything inside it.
  *
  * CONNECTED-STATE ANIMATION. While the tunnel is up, the card edge carries a
  * light show: segments of light travel around the border and breathe in length,
@@ -185,6 +189,9 @@ fun ConnectionCard(
     // Only alive while connected: no frame subscription when there is nothing
     // to show off.
     val cycle = if (connected && LocalHomeVisible.current && LocalHomeAnimationsEnabled.current) rememberGlowCycle() else null
+    var detail by remember { mutableStateOf(DETAIL_NONE) }
+    var chainLabel by remember { mutableStateOf("") }
+    var traffic by remember { mutableStateOf(TrafficStats()) }
 
     Box(
         modifier = modifier
@@ -216,11 +223,32 @@ fun ConnectionCard(
             StatusBlock(title = statusTitle, caption = statusCaption, accent = accent)
             TimerBlock(connectedSince = connectedSince, connected = connected)
             ServerIpPill(connected = connected, ipInfo = ipInfo, ipLoading = ipLoading)
-            SpeedStrip(connectedSince = connectedSince, connected = connected)
-            MetaSlides(connected = connected, backend = backend)
+            SpeedStrip(connectedSince = connectedSince, connected = connected, onClick = { stats ->
+                traffic = stats
+                detail = DETAIL_TRAFFIC
+            })
+            MetaSlides(connected = connected, backend = backend, onChain = { label ->
+                chainLabel = label
+                detail = DETAIL_CHAIN
+            })
         }
     }
+    when (detail) {
+        DETAIL_CHAIN -> ChainDetailsDialog(
+            chain = chainLabel, ipInfo = ipInfo, connected = connected,
+            onDismiss = { detail = DETAIL_NONE },
+        )
+        DETAIL_TRAFFIC -> TrafficDetailsDialog(
+            connected = connected, sinceMs = connectedSince,
+            downTotal = traffic.downTotal, upTotal = traffic.upTotal,
+            onDismiss = { detail = DETAIL_NONE },
+        )
+    }
 }
+
+private const val DETAIL_NONE = 0
+private const val DETAIL_CHAIN = 1
+private const val DETAIL_TRAFFIC = 2
 
 // --------------------------------------------------------------- 1. status
 
@@ -467,12 +495,13 @@ private fun copyToClipboard(context: Context, text: String) {
 // --------------------------------------------------------------- 4. speeds
 
 @Composable
-private fun SpeedStrip(connectedSince: Long?, connected: Boolean) {
+private fun SpeedStrip(connectedSince: Long?, connected: Boolean, onClick: ((TrafficStats) -> Unit)? = null) {
     val stats = rememberTrafficStats(connectedSince = connectedSince, connected = connected)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick?.invoke(stats) } else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -555,9 +584,10 @@ private fun SpeedCell(
  * [connected], exactly as the old three-column strip had it.
  */
 @Composable
-private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
+private fun MetaSlides(connected: Boolean, backend: TransportBackend, onChain: (String) -> Unit = {}) {
     val meta by EngineMeta.state.collectAsState()
     val ping by PingMonitor.state.collectAsState()
+    var showPingDetails by remember { mutableStateOf(false) }
 
     // Same validated HTTPS generate_204 metric as the config catalog, through
     // the live tunnel. PingMonitor serialises probes and reuses its channel.
@@ -618,6 +648,7 @@ private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
             label = stringResource(R.string.meta_pipeline),
             value = pipelineForms.first(),
             forms = pipelineForms,
+            onClick = { onChain(pipelineForms.first()) },
         )
         // r4: the Endpoint slide is gone. The engine's gateway address told the
         // user nothing they could act on (it is picked and rotated by the scan),
@@ -625,10 +656,12 @@ private fun MetaSlides(connected: Boolean, backend: TransportBackend) {
         MetaSlide(
             label = stringResource(R.string.meta_latency),
             value = latency,
-            below = { PingStrength(connected = connected, ms = if (stale) -1L else lastMs) },
+            below = { PingStrength(connected = connected, ms = if (stale) -1L else lastMs, failed = ping.error) },
             stale = stale,
+            onClick = { showPingDetails = true },
         )
     }
+    if (showPingDetails) PingDetailsDialog(onDismiss = { showPingDetails = false })
 }
 
 /**
@@ -648,6 +681,7 @@ private fun MetaSlide(
     forms: List<String> = listOf(value),
     /** 1.6.0: dims the value when it is a retained reading, not a fresh one. */
     stale: Boolean = false,
+    onClick: (() -> Unit)? = null,
 ) {
     val valueStyle = MaterialTheme.typography.bodySmall.copy(
         fontSize = 13.sp,
@@ -661,6 +695,7 @@ private fun MetaSlide(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick?.invoke() } else Modifier)
             .background(color = CardSubSurface, shape = SUB_SHAPE)
             .subEdge(SUB_SHAPE)
             .padding(horizontal = 14.dp, vertical = 9.dp),
@@ -744,7 +779,7 @@ private fun MetaSlide(
  * `drawBehind`, and the transition is only composed while connected.
  */
 @Composable
-private fun PingStrength(connected: Boolean, ms: Long) {
+private fun PingStrength(connected: Boolean, ms: Long, failed: Boolean) {
     // 1 = excellent, 0 = unusable. Reused for height, speed and colour so the
     // three can never disagree.
     val strength = when {
@@ -762,7 +797,7 @@ private fun PingStrength(connected: Boolean, ms: Long) {
     )
     // One grade drives the word AND the colour, so green bars can never sit
     // under the word "Fair" again. See [pingGrade].
-    val grade = pingGrade(connected, ms)
+    val grade = pingGrade(connected, ms, failed)
     val tint = pingTint(grade)
     val quality = stringResource(pingQualityRes(grade))
 
@@ -863,10 +898,11 @@ private fun PingStrength(connected: Boolean, ms: Long) {
  * decides. One enum, one set of cut-offs, and the comment in [PingStrength] that
  * promised the three "can never disagree" is now actually true.
  */
-private enum class PingGrade { OFFLINE, MEASURING, EXCELLENT, GOOD, FAIR, POOR }
+private enum class PingGrade { OFFLINE, MEASURING, FAILED, EXCELLENT, GOOD, FAIR, POOR }
 
-private fun pingGrade(connected: Boolean, ms: Long): PingGrade = when {
+private fun pingGrade(connected: Boolean, ms: Long, failed: Boolean): PingGrade = when {
     !connected -> PingGrade.OFFLINE
+    failed -> PingGrade.FAILED
     ms < 0L -> PingGrade.MEASURING
     ms <= PING_EXCELLENT_MS -> PingGrade.EXCELLENT
     ms <= PING_GOOD_MS -> PingGrade.GOOD
@@ -878,12 +914,13 @@ private fun pingTint(grade: PingGrade): Color = when (grade) {
     PingGrade.EXCELLENT, PingGrade.GOOD -> AetherMint
     PingGrade.FAIR -> PING_FAIR
     PingGrade.POOR -> PING_POOR
-    PingGrade.OFFLINE, PingGrade.MEASURING -> CardTextDim
+    PingGrade.OFFLINE, PingGrade.MEASURING, PingGrade.FAILED -> CardTextDim
 }
 
 private fun pingQualityRes(grade: PingGrade): Int = when (grade) {
     PingGrade.OFFLINE -> R.string.ping_quality_offline
     PingGrade.MEASURING -> R.string.ping_quality_measuring
+    PingGrade.FAILED -> R.string.ping_quality_failed
     PingGrade.EXCELLENT -> R.string.ping_quality_excellent
     PingGrade.GOOD -> R.string.ping_quality_good
     PingGrade.FAIR -> R.string.ping_quality_fair
@@ -1040,10 +1077,10 @@ private fun formatRate(v: Long): String = formatBytes(v) + "/s"
 private val CARD_RADIUS = 26.dp
 private val CARD_SHAPE = RoundedCornerShape(CARD_RADIUS)
 private val SUB_SHAPE = RoundedCornerShape(18.dp)
-private val SUB_BORDER = Color(0x1F3EDBB0)
+private val SUB_BORDER = AetherMint.copy(alpha = 0.12f)
 private val DIVIDER = Color(0x1FFFFFFF)
-private val IDLE_ACCENT = Color(0xFF4C8DFF)
-private val ERROR_ACCENT = Color(0xFFFF5C7A)
+private val IDLE_ACCENT = AetherViolet
+private val ERROR_ACCENT = AetherError
 private const val LATENCY_REFRESH_MS = 4_000L
 
 /** 1.5.0: the smallest size a chain label is shown at before a shorter form of it is used. */
@@ -1064,5 +1101,5 @@ private const val PING_BARS = 26
 private val PING_BAR_GAP = 3.dp
 private val PING_WAVE_HEIGHT = 22.dp
 private const val PING_WAVE_MS = 1_500
-private val PING_FAIR = Color(0xFFFFB43C)
-private val PING_POOR = Color(0xFFFF5C7A)
+private val PING_FAIR = AetherAmber
+private val PING_POOR = AetherError

@@ -5,79 +5,161 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * AES-GCM secret vault for the Zero Trust credentials introduced with engine
- * v1.5.0 (Access service-token client secret, enrolment JWT).
+ * AES-GCM secret vault backed by a non-exportable Android Keystore key.
  *
- * WHY THIS EXISTS
- * ---------------
- * Everything else in the connection profile is a preference; losing it is
- * cosmetic. An Access service token is a long-lived credential for someone's
- * *organization*. Keeping it next to the MTU setting in a plain DataStore
- * protobuf would mean it lands in any backup of the app's data dir, is
- * readable with a file manager on a rooted device, and survives in plaintext
- * after the user clears the field.
- *
- * So the value is sealed with an AES-256-GCM key generated inside the Android
- * Keystore and marked non-exportable: the raw key never enters the app's
- * address space, and the ciphertext alone is useless on another device.
+ * Hardware backing is device-dependent. This protects ciphertext at rest; it
+ * does not protect plaintext while in use or guarantee safety on a compromised
+ * running device.
  *
  * Layout: Base64( iv(12) || ciphertext||tag ).
  */
 class SecretStore(context: Context) {
 
-    private val prefs =
-        context.getSharedPreferences("aether_secrets", Context.MODE_PRIVATE)
+    sealed interface ReadResult {
+        data object Missing : ReadResult
+        data class Value(val value: String) : ReadResult
+        data class KeyUnavailable(val cause: Throwable? = null) : ReadResult
+        data class CorruptData(val cause: Throwable? = null) : ReadResult
+        data class StorageFailure(val cause: Throwable? = null) : ReadResult
+    }
 
-    /** Reads and decrypts [name]; returns "" when unset or undecryptable. */
-    fun read(name: String): String {
-        val stored = prefs.getString(name, null) ?: return ""
-        return runCatching {
-            val blob = Base64.decode(stored, Base64.NO_WRAP)
-            if (blob.size <= IV_LEN) return ""
+    sealed interface WriteResult {
+        data object Saved : WriteResult
+        data object Cleared : WriteResult
+        data class KeyUnavailable(val cause: Throwable? = null) : WriteResult
+        data class CorruptData(val cause: Throwable? = null) : WriteResult
+        data class StorageFailure(val cause: Throwable? = null) : WriteResult
+    }
+
+    private val prefs =
+        context.applicationContext.getSharedPreferences("aether_secrets", Context.MODE_PRIVATE)
+
+    /**
+     * Reads a value without creating a replacement key.
+     *
+     * If ciphertext exists but its original Keystore key is missing or
+     * inaccessible, the ciphertext is retained and KeyUnavailable is returned.
+     * Authentication/format failures are reported as CorruptData and are never
+     * silently deleted.
+     */
+    fun readResult(name: String): ReadResult {
+        val stored = try {
+            prefs.getString(name, null)
+        } catch (t: Throwable) {
+            return ReadResult.StorageFailure(t)
+        } ?: return ReadResult.Missing
+
+        val blob = try {
+            Base64.decode(stored, Base64.NO_WRAP)
+        } catch (t: IllegalArgumentException) {
+            return ReadResult.CorruptData(t)
+        } catch (t: Throwable) {
+            return ReadResult.StorageFailure(t)
+        }
+        if (blob.size <= IV_LEN + TAG_LEN_BYTES) return ReadResult.CorruptData()
+
+        val secret = try {
+            existingKey()
+        } catch (t: Throwable) {
+            return ReadResult.KeyUnavailable(t)
+        } ?: return ReadResult.KeyUnavailable()
+
+        return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(
                 Cipher.DECRYPT_MODE,
-                key(),
+                secret,
                 GCMParameterSpec(TAG_BITS, blob.copyOfRange(0, IV_LEN)),
             )
-            String(cipher.doFinal(blob.copyOfRange(IV_LEN, blob.size)), Charsets.UTF_8)
-        }.getOrElse {
-            // Key invalidated or restored onto another device: drop the
-            // unusable ciphertext instead of keeping a value we can't read.
-            prefs.edit().remove(name).apply()
-            ""
+            ReadResult.Value(String(cipher.doFinal(blob, IV_LEN, blob.size - IV_LEN), Charsets.UTF_8))
+        } catch (t: AEADBadTagException) {
+            ReadResult.CorruptData(t)
+        } catch (t: java.security.GeneralSecurityException) {
+            ReadResult.KeyUnavailable(t)
+        } catch (t: Throwable) {
+            ReadResult.StorageFailure(t)
         }
     }
 
-    /** Encrypts and stores [value]; a blank value clears the entry. */
-    fun write(name: String, value: String) {
-        if (value.isBlank()) {
-            prefs.edit().remove(name).apply()
-            return
+    /**
+     * Encrypts and commits [value]. Existing unreadable ciphertext is never
+     * overwritten: callers must resolve the storage error explicitly first.
+     */
+    fun writeResult(name: String, value: String): WriteResult {
+        if (value.isBlank()) return clearResult(name)
+
+        when (val existing = readResult(name)) {
+            ReadResult.Missing, is ReadResult.Value -> Unit
+            is ReadResult.KeyUnavailable -> return WriteResult.KeyUnavailable(existing.cause)
+            is ReadResult.CorruptData -> return WriteResult.CorruptData(existing.cause)
+            is ReadResult.StorageFailure -> return WriteResult.StorageFailure(existing.cause)
         }
-        runCatching {
+
+        return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, key())
+            cipher.init(Cipher.ENCRYPT_MODE, keyForWrite())
             val blob = cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-            prefs.edit()
-                .putString(name, Base64.encodeToString(blob, Base64.NO_WRAP))
-                .apply()
+            if (prefs.edit().putString(name, Base64.encodeToString(blob, Base64.NO_WRAP)).commit()) {
+                WriteResult.Saved
+            } else {
+                WriteResult.StorageFailure()
+            }
+        } catch (t: java.security.GeneralSecurityException) {
+            WriteResult.KeyUnavailable(t)
+        } catch (t: Throwable) {
+            WriteResult.StorageFailure(t)
         }
     }
 
-    /** Wipes every sealed secret (used by "Reset settings"). */
-    fun clear() = prefs.edit().clear().apply()
+    /** Explicitly removes one value; this is a destructive caller-requested action. */
+    fun clearResult(name: String): WriteResult = try {
+        if (prefs.edit().remove(name).commit()) WriteResult.Cleared else WriteResult.StorageFailure()
+    } catch (t: Throwable) {
+        WriteResult.StorageFailure(t)
+    }
 
-    private fun key(): SecretKey {
+    /** Explicitly wipes every sealed secret (used by a user-confirmed reset). */
+    fun clearAllResult(): WriteResult = try {
+        if (prefs.edit().clear().commit()) WriteResult.Cleared else WriteResult.StorageFailure()
+    } catch (t: Throwable) {
+        WriteResult.StorageFailure(t)
+    }
+
+    /**
+     * Legacy compatibility API. Migrate callers to [readResult] so missing,
+     * corrupt, and unavailable secrets are not conflated.
+     */
+    @Deprecated("Use readResult and handle every failure state explicitly")
+    fun read(name: String): String = (readResult(name) as? ReadResult.Value)?.value.orEmpty()
+
+    /** Legacy compatibility API; new callers must inspect [writeResult]. */
+    @Deprecated("Use writeResult and handle its result")
+    fun write(name: String, value: String) {
+        writeResult(name, value)
+    }
+
+    /** Legacy compatibility API; new callers must inspect [clearAllResult]. */
+    @Deprecated("Use clearAllResult and handle its result")
+    fun clear() {
+        clearAllResult()
+    }
+
+    /** Existing-key-only lookup. It deliberately never creates a new key. */
+    private fun existingKey(): SecretKey? {
         val ks = KeyStore.getInstance(PROVIDER).apply { load(null) }
-        (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey?.let { return it }
+        return (ks.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+    }
 
+    /** Creates a key only when a new value is being written. */
+    private fun keyForWrite(): SecretKey {
+        existingKey()?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER)
         generator.init(
             KeyGenParameterSpec.Builder(
@@ -87,8 +169,7 @@ class SecretStore(context: Context) {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
-                // Deliberately NOT user-authentication bound: the VPN must be
-                // able to reconnect unattended (boot, network change).
+                // Deliberately NOT user-authentication bound: unattended VPN reconnect is required.
                 .setRandomizedEncryptionRequired(true)
                 .build(),
         )
@@ -98,35 +179,13 @@ class SecretStore(context: Context) {
     companion object {
         const val ACCESS_SECRET = "access_client_secret"
         const val ACCESS_TOKEN = "access_token"
-
-        /**
-         * The pre-connect Zero Trust sign-in (1.4.0-r9): the enrolment JWT that
-         * Cloudflare issued for the e-mail code typed in Settings, bound to the
-         * team and the address it was issued for. One sealed value, so the binding
-         * is inside the ciphertext. See [TeamSignInStore] and
-         * [studio.cluvex.aether.core.TeamSignInRecord].
-         */
         const val ACCESS_SIGNIN = "access_signin"
-
-        /**
-         * The user's own Gemini API key (1.2.9 AI features).
-         *
-         * Sealed here for the same reason the Access secret is, plus one that is
-         * specific to it: a Gemini key is a BILLABLE credential tied to the
-         * user's Google account, so a leak out of a backup or off a rooted
-         * device means somebody else spending the user's quota under the user's
-         * identity. It therefore never lands in the plain DataStore preferences
-         * file next to the MTU, it is scrubbed out of anything the AI layer
-         * sends to Google (see [studio.cluvex.aether.ai.AiRedaction]), and it
-         * travels in a request HEADER rather than a query string so it cannot
-         * end up inside a URL that something else logs.
-         */
-        const val GEMINI_KEY = "gemini_api_key"
 
         private const val PROVIDER = "AndroidKeyStore"
         private const val KEY_ALIAS = "aether_secret_v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val IV_LEN = 12
         private const val TAG_BITS = 128
+        private const val TAG_LEN_BYTES = TAG_BITS / 8
     }
 }

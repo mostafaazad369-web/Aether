@@ -15,10 +15,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.InetSocketAddress
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.Proxy
+import java.net.InetSocketAddress
+import java.net.UnknownHostException
 import java.net.URL
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 /**
  * The three ways a config gets into the app - link, file, QR code - all ending
@@ -29,6 +36,8 @@ object ConfigImporter {
 
     private const val MAX_BYTES = 2 * 1024 * 1024
     private const val TIMEOUT_MS = 20_000
+    private const val MAX_REDIRECTS = 5
+    private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
     @Volatile
     private var cachedTables: NpvtCodec.Tables? = null
@@ -60,7 +69,10 @@ object ConfigImporter {
     ): List<CustomConfig> = withContext(Dispatchers.IO) {
         val t = ConfigParser.cleanInput(text)
         if (ConfigParser.looksLikeMtProto(t)) throw ConfigImportException(ConfigParser.MTPROTO_UNSUPPORTED)
-        val body = if (t.startsWith("https://", ignoreCase = true) || t.startsWith("http://", ignoreCase = true)) {
+        if (t.startsWith("http://", ignoreCase = true)) {
+            throw ConfigImportException("subscription links must use HTTPS to protect server credentials")
+        }
+        val body = if (t.startsWith("https://", ignoreCase = true)) {
             if (t.lines().size > 1) t else return@withContext ConfigParser.parseBytes(
                 download(t), source, { tables(context) }, { gen2Tables(context) }, password)
         } else {
@@ -103,36 +115,219 @@ object ConfigImporter {
 
     // ------------------------------------------------------------- helpers
 
-    private fun download(url: String): ByteArray {
-        // The app is excluded from its own VPN, so a plain connection would fetch
-        // the subscription on the bare network even while connected: the operator
-        // would see (and could block) the subscription host. While a session runs
-        // the request goes through the tunnel's local SOCKS5 port instead.
-        val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
-        val target = URL(url)
-        val opened = if (port in 1..65535) {
-            target.openConnection(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+    /** Shared URL policy for the initial subscription URL and every redirect hop. */
+    internal fun validateSubscriptionUrl(url: URL) {
+        if (!url.protocol.equals("https", ignoreCase = true) || url.userInfo != null) {
+            throw ConfigImportException("subscription links and redirects must use HTTPS without embedded credentials")
+        }
+    }
+
+    /** Returns the remaining monotonic budget for one hop of a subscription download. */
+    internal fun remainingSubscriptionTimeoutNanos(deadlineNanos: Long, nowNanos: Long): Long {
+        val remaining = deadlineNanos - nowNanos
+        if (remaining <= 0L) {
+            throw ConfigImportException("subscription download timed out")
+        }
+        return remaining
+    }
+
+    /** Enforces the same redirect budget used by the live downloader. */
+    internal fun validateSubscriptionRedirect(url: URL, redirectsFollowed: Int) {
+        if (redirectsFollowed > MAX_REDIRECTS) {
+            throw ConfigImportException("subscription address redirected too many times")
+        }
+        validateSubscriptionUrl(url)
+    }
+
+    /**
+     * Direct subscription requests must not reach local, private, reserved, or
+     * special-purpose destinations. OkHttp's Dns contract pins the returned
+     * addresses into its connection routes, avoiding a second DNS lookup between
+     * validation and connect (the classic DNS-rebinding gap).
+     *
+     * SOCKS requests deliberately do not use this resolver: OkHttp sends the
+     * unresolved hostname to the local SOCKS proxy, which resolves it through
+     * the tunnel rather than on the handset.
+     */
+    internal fun validateDirectDnsResults(addresses: List<InetAddress>): List<InetAddress> {
+        if (addresses.isEmpty() || addresses.any { !isPublicInternetAddress(it) }) {
+            throw ConfigImportException("subscription host must resolve only to public internet addresses")
+        }
+        return addresses
+    }
+
+    internal fun isPublicInternetAddress(address: InetAddress): Boolean {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress ||
+            address.isLinkLocalAddress || address.isSiteLocalAddress ||
+            address.isMulticastAddress
+        ) return false
+
+        val bytes = address.address.map { it.toInt() and 0xff }
+        if (address is Inet4Address) return isPublicIpv4(bytes)
+        if (address !is Inet6Address) return false
+
+        // IPv4-mapped IPv6 and the well-known NAT64 prefix carry an IPv4 target.
+        if (bytes.take(10).all { it == 0 } && bytes[10] == 0xff && bytes[11] == 0xff) {
+            return isPublicIpv4(bytes.drop(12))
+        }
+        if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xff &&
+            bytes[3] == 0x9b && bytes.subList(4, 12).all { it == 0 }
+        ) return isPublicIpv4(bytes.drop(12))
+
+        // Permit global-unicast 2000::/3 only. This excludes ULA, link-local,
+        // multicast, discard-only, and other non-global IPv6 address spaces.
+        if ((bytes[0] and 0xe0) != 0x20) return false
+        // 2001::/23 is reserved for IETF protocol assignments. Its only
+        // globally-reachable exceptions are the three exact anycast /128 hosts.
+        if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
+            bytes[2] == 0x00 && (bytes[3] and 0xfe) == 0x00
+        ) {
+            val isRegisteredGlobalAnycast =
+                bytes[3] == 0x01 &&
+                    bytes.subList(4, 15).all { it == 0 } &&
+                    bytes[15] in 1..3
+            if (!isRegisteredGlobalAnycast) return false
+        }
+        // Deprecated ORCHID (2001:10::/28), benchmarking (2001:2::/48),
+        // documentation, and 6to4 are not public subscription destinations.
+        if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
+            bytes[2] == 0x00 && (bytes[3] and 0xf0) == 0x10
+        ) return false
+        if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
+            bytes[2] == 0x00 && bytes[3] == 0x02 &&
+            bytes[4] == 0x00 && bytes[5] == 0x00
+        ) return false
+        if (bytes[0] == 0x20 && bytes[1] == 0x01 &&
+            bytes[2] == 0x0d && bytes[3] == 0xb8
+        ) return false
+        if (bytes[0] == 0x20 && bytes[1] == 0x02) return false
+        // The 3fff::/20 documentation block is inside 2000::/3.
+        if (bytes[0] == 0x3f && bytes[1] == 0xff && (bytes[2] and 0xf0) == 0x00) return false
+        // Segment Routing SIDs (5f00::/16) are not globally reachable.
+        if (bytes[0] == 0x5f && bytes[1] == 0x00) return false
+        return true
+    }
+
+    private fun isPublicIpv4(bytes: List<Int>): Boolean {
+        if (bytes.size != 4) return false
+        val value = bytes.fold(0L) { acc, byte -> (acc shl 8) or byte.toLong() }
+        fun inRange(network: Long, prefix: Int): Boolean {
+            val mask = (0xffff_ffffL shl (32 - prefix)) and 0xffff_ffffL
+            return (value and mask) == (network and mask)
+        }
+        // IANA marks 192.0.0.0/24 as non-global overall, but these two
+        // exact anycast hosts are explicitly globally reachable.
+        if (value == 0xc0000009L || value == 0xc000000aL) return true
+
+        val blocked = listOf(
+            0x00000000L to 8,   // "this" network
+            0x0a000000L to 8,   // private
+            0x64400000L to 10,  // shared address space / CGNAT
+            0x7f000000L to 8,   // loopback
+            0xa9fe0000L to 16,  // link-local
+            0xac100000L to 12,  // private
+            0xc0000000L to 24,  // IETF protocol assignments
+            0xc0000200L to 24,  // documentation
+            0xc0586300L to 24,  // deprecated 6to4 relay anycast
+            0xc0a80000L to 16,  // private
+            0xc6120000L to 15,  // benchmarking
+            0xc6336400L to 24,  // documentation
+            0xcb007100L to 24,  // documentation
+            0xe0000000L to 4,   // multicast and reserved
+            0xf0000000L to 4,   // reserved for future use and limited broadcast
+        )
+        return blocked.none { (network, prefix) -> inRange(network, prefix) }
+    }
+
+    /**
+     * Builds the same client used by subscription downloads. In SOCKS mode OkHttp
+     * must receive the unresolved destination hostname so the proxy performs DNS;
+     * in direct mode every DNS answer is validated and pinned into the route.
+     *
+     * [directDns] is injectable for deterministic tests. It is deliberately never
+     * consulted when [proxyPort] selects the SOCKS path.
+     */
+    internal fun createSubscriptionHttpClient(
+        proxyPort: Int?,
+        directDns: Dns = Dns.SYSTEM,
+    ): OkHttpClient {
+        val clientBuilder = OkHttpClient.Builder()
+            .connectTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            // Bound the whole exchange too; readTimeout alone permits slow-trickle responses.
+            .callTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+
+        if (proxyPort != null && proxyPort in 1..65535) {
+            clientBuilder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort)))
         } else {
-            target.openConnection()
+            clientBuilder.dns(object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> =
+                    try {
+                        validateDirectDnsResults(directDns.lookup(hostname))
+                    } catch (e: ConfigImportException) {
+                        throw UnknownHostException(e.message)
+                    }
+            })
         }
-        val conn = (opened as HttpURLConnection).apply {
-            connectTimeout = TIMEOUT_MS
-            readTimeout = TIMEOUT_MS
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Aether")
-            setRequestProperty("Accept", "*/*")
+        return clientBuilder.build()
+    }
+
+    private fun download(url: String): ByteArray {
+        // Subscription URLs can contain credentials. Never send them over cleartext,
+        // and never let an HTTPS endpoint downgrade the request through a redirect.
+        var target = runCatching { URL(url) }.getOrElse {
+            throw ConfigImportException("invalid subscription address")
         }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) throw ConfigImportException("the address answered HTTP $code")
-            return conn.inputStream.use { readLimited(it) }
-        } catch (e: ConfigImportException) {
-            throw e
-        } catch (e: Exception) {
-            throw ConfigImportException("the address could not be downloaded (${e.javaClass.simpleName})")
-        } finally {
-            conn.disconnect()
+        val port = studio.cluvex.aether.vpn.AetherVpnService.activeForwardPort
+        val client = createSubscriptionHttpClient(port.takeIf { it in 1..65535 })
+        // One deadline covers every redirect hop and the final response body.
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TIMEOUT_MS.toLong())
+        for (redirect in 0..MAX_REDIRECTS) {
+            validateSubscriptionRedirect(target, redirect)
+            val request = Request.Builder()
+                .url(target)
+                .header("User-Agent", "Aether")
+                .header("Accept", "*/*")
+                .get()
+                .build()
+            val response = try {
+                val remainingNanos = remainingSubscriptionTimeoutNanos(deadlineNanos, System.nanoTime())
+                val hopClient = client.newBuilder()
+                    .callTimeout(remainingNanos, TimeUnit.NANOSECONDS)
+                    .build()
+                hopClient.newCall(request).execute()
+            } catch (e: Exception) {
+                throw ConfigImportException("the address could not be downloaded (${e.javaClass.simpleName})")
+            }
+
+            try {
+                if (response.code in REDIRECT_CODES) {
+                    val location = response.header("Location")
+                        ?: throw ConfigImportException("subscription redirect has no destination")
+                    val nextTarget = runCatching { URL(target, location) }.getOrElse {
+                        throw ConfigImportException("subscription redirect address is invalid")
+                    }
+                    validateSubscriptionRedirect(nextTarget, redirect + 1)
+                    target = nextTarget
+                    continue
+                }
+                if (response.code !in 200..299) {
+                    throw ConfigImportException("the address answered HTTP ${response.code}")
+                }
+                val body = response.body
+                    ?: throw ConfigImportException("the address returned an empty response")
+                if (body.contentLength() > MAX_BYTES) {
+                    throw ConfigImportException("the file is too large")
+                }
+                return body.byteStream().use { readLimited(it) }
+            } finally {
+                response.close()
+            }
         }
+        throw ConfigImportException("subscription address could not be downloaded")
     }
 
     private fun readLimited(input: InputStream, limit: Int = MAX_BYTES): ByteArray {

@@ -1,13 +1,13 @@
 > **1.6.0:** [Release notes](.github/release-notes.md) · [Detailed notes](docs/RELEASE_1.6.0.md) · [Changelog](CHANGELOG.md)
 
 <p align="center">
-  <img src="docs/ads.png" alt="Aether — Freedom, in one tap" width="100%">
+  <img src="docs/ads.png" alt="Aether Pro — Freedom, in one tap" width="100%">
 </p>
 
-<h1 align="center">Aether Mobile</h1>
+<h1 align="center">Aether Pro</h1>
 
 <p align="center">
-  A dark <b>Material You</b> Android VPN client with the Aether engine, Tor, Psiphon
+  A free, dark <b>Material You</b> Android VPN app powered by the Aether engine, Tor, Psiphon
   and Xray built <b>inside the app</b>.
 </p>
 
@@ -36,7 +36,6 @@
 - [Settings guide](#settings-guide)
 - [Quick Settings tile and widget](#quick-settings-tile-and-widget)
 - [Sharing the VPN with other devices](#sharing-the-vpn-with-other-devices)
-- [Gemini AI assistant](#gemini-ai-assistant)
 - [Privacy: where your traffic goes](#privacy-where-your-traffic-goes)
 - [Security audit](#security-audit)
 - [Updates and app signing](#updates-and-app-signing)
@@ -47,7 +46,7 @@
 
 ## Overview
 
-Aether Mobile runs the Aether engine on the phone and brings up an Android
+Aether Pro runs the Aether engine on the phone and brings up an Android
 `VpnService`. A built-in tunnel core (`hev-socks5-tunnel`) forwards every packet
 from the VPN interface into the engine's local SOCKS5 proxy, so no second app
 (such as v2rayNG) is needed.
@@ -80,7 +79,6 @@ NapsternetV configs run in a bundled Xray-core, alone or chained with the engine
 - **VPN sharing** over Wi-Fi or hotspot (HTTP, SOCKS5 and PAC), with setup pages
   for the other devices.
 - **Quick Settings tile** and a **home-screen widget**.
-- **Optional Gemini AI assistant** for settings advice, explanations and chat.
 - **Encrypted local diagnostics log** and settings, sealed with an Android Keystore key.
 
 ## Connection modes
@@ -141,9 +139,8 @@ App version **1.6.0** (version code 19), engine core **2.4.0**.
   moving home-screen effects on weaker phones (the connect button still spins while connecting).
 - **Connection sounds** switch: turns the short cue on connect and disconnect on or off; silent mode is respected.
 
-**Assistant and polish**
+**App polish**
 
-- Gemini uses the active session's final endpoint and never sees the private config vault.
 - The onboarding pager is gone; the *What's new* dialog and *Messages & announcements* remain.
 - A stable-key tab strip fixes the tab-index crash.
 
@@ -234,7 +231,7 @@ Tips:
 | **Zero Trust** | Join a Cloudflare Zero Trust organization instead of consumer WARP |
 | **Core log level** | Detail of the engine log in *Diagnostics* |
 
-Every option has an information icon that explains what it does.
+Settings pages include concise descriptions and help text where useful.
 
 ## Quick Settings tile and widget
 
@@ -262,27 +259,6 @@ with one tap.
 > ⚠️ Devices on the same network can reach the proxy while sharing is on. Use it on
 > networks you trust; **Generate a new password** revokes old access. Sharing
 > stops when the VPN disconnects.
-
-## Gemini AI assistant
-
-Optional and off until you add a key.
-
-1. Get a free key from [Google AI Studio](https://aistudio.google.com/apikey).
-2. **Settings → Assistant** → paste the key → **Test the API connection** → pick a model.
-3. Use it for:
-   - **Settings advisor:** reads a redacted excerpt of this session's log and
-     suggests settings; nothing changes until you tap **Apply**.
-   - **AI icons** next to each setting with an explanation in your language.
-   - **Chat** (Assistant → Chat, or the AI button on the home screen).
-
-The key is stored encrypted in the Android Keystore. Credentials and public IP
-addresses are removed from anything sent. The assistant can only change tuning
-options (protocol, scan mode, obfuscation, MTU, timings and similar); it can never
-change the mode, routing, split tunnelling, sharing or Zero Trust credentials.
-Changes apply on the next connect.
-
-AI requests go through the tunnel, so the assistant works only while connected
-in `Aether → Psiphon` mode (Google's AI endpoints refuse WARP exit addresses).
 
 ## Privacy: where your traffic goes
 

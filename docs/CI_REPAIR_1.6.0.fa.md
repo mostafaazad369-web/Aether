@@ -1,0 +1,58 @@
+# اصلاح CI — نسخهٔ 1.6.0، کد پایهٔ 19
+
+## تشخیص مبتنی بر لاگ ارسالی
+
+فایل `build/29_Audit Rust dependencies (cargo audit).txt` در آرشیو `logs_107177577920.zip` محل توقف واقعی است، نه کامپایل Kotlin یا Lint:
+
+- سطرهای 562 تا 564: نصب `cargo-audit 0.22.2` موفق است.
+- سطر 566: دو آسیب‌پذیری و دو هشدار اطلاعاتی گزارش می‌شود.
+- سطرهای 568 تا 571: `rustls-webpki 0.103.15 / RUSTSEC-2026-0382` و `webpki-roots 1.0.9 / RUSTSEC-2026-0381`.
+- سطرهای 572 تا 575: نگه‌داری‌نشدن `bincode 2.0.1` و `paste 1.0.15`؛ این‌ها علت exit 1 نیستند.
+- سطرهای 576 تا 578: scanner با exit 1 تمام شده و سیاست strict انتشار را مسدود کرده است.
+
+در این اجرای ارسالی، ساخت native پیش از audit انجام شده، ولی مراحل تست Gradle و ساخت APK پس از audit نرسیده‌اند. رشته‌های `echo ::error::` در متن اسکریپت‌های چاپ‌شده را نباید با وقوع واقعی خطا اشتباه گرفت. برای خطای Gradle/manifest/signing در این اجرای ارسالی شاهدی وجود ندارد.
+
+## اصلاح ریشه‌ای
+
+دو مدخل واقعی Cargo.lock با خود Cargo ارتقا داده شده‌اند؛ checksum دستی یا ساختگی نیست:
+
+| crate | قبل | نسخهٔ اصلاح‌شده |
+| --- | --- | --- |
+| rustls-webpki | 0.103.15 | 0.103.16 |
+| webpki-roots | 1.0.9 | 1.0.10 |
+
+مرجع رسمی حداقل نسخه‌ها:
+
+- https://rustsec.org/advisories/RUSTSEC-2026-0382.html
+- https://rustsec.org/advisories/RUSTSEC-2026-0381.html
+
+این دو کف امنیتی به `scripts/patch-engine-dependencies.py` نیز افزوده شده‌اند، تا core همگام‌شده یا fallback قدیمی دوباره lock آسیب‌پذیر نسازد. مسیر واقعی build-natives همین محافظ را پیش از `build --release --locked` اجرا می‌کند. نسخه‌های جدیدتر downgrade نمی‌شوند؛ شکست cargo update یا عدم تغییر lock خطا محسوب می‌شود. بستهٔ سازگاری `webpki-roots 0.26.11` با خط نسخهٔ 1.x اشتباه گرفته نمی‌شود.
+
+کنترل strict، audit lock ضبط‌شدهٔ باینری ساخته‌شده، آزمون امضا و سیاست fail-closed حفظ شده‌اند. هیچ `continue-on-error` یا ignore جدیدی برای این دو آسیب‌پذیری اضافه نشده است. استثنای محدود و ازپیش‌موجود `RUSTSEC-2023-0071` تغییر نکرده؛ صفر بودن خروجی audit با همین سیاست موجود گزارش می‌شود، نه به معنی حذف آن استثنا یا نبود هر ریسک ممکن.
+
+## race آشکارشده در اعتبارسنجی محلی
+
+آزمون ذخیرهٔ تب در اجرای محلی یک timeout واقعی نشان داد: collector تنبل `CleanIpScanManager` با `drop(1)` ممکن بود اولین snapshot را پس از حذف سرور دریافت کند و همان حذف را دور بیندازد. `drop(1)` از مشاهدهٔ کانفیگ و اتصال حذف شد؛ محافظ مقایسه با snapshot پیام همچنان از پاک‌شدن پیام تازه توسط رویداد قدیمی جلوگیری می‌کند. خواب اولیهٔ تست حذف شد، نه اینکه timeout بیشتر یا تست خاموش شود. این مورد علت لاگ GitHub ارسالی نبود؛ در اعتبارسنجی محلی کشف و اصلاح شد.
+
+## اعتبارسنجی و مرز ادعا
+
+نتایج واقعی اجرا، JUnit، audit قبل/بعد و رندرها در ZIP شواهد جدا از سورس تحویل می‌شوند. گزارش نهایی همان‌جا ثبت می‌شود؛ فایل‌های generated داخل سورس قرار نمی‌گیرند.
+
+فرمان‌های بررسی:
+
+```bash
+python3 scripts/test-security-ci.py
+python3 scripts/test-functional-wiring.py
+python3 scripts/test-auto-signing.py
+bash scripts/test-core-sync.sh
+python3 scripts/patch-engine-dependencies.py native/aether/aether
+python3 scripts/audit-rust.py --strict --crate native/aether/aether --report /tmp/cargo-audit.json
+cargo check --locked --manifest-path native/aether/aether/Cargo.toml -p rustls-webpki -p webpki-roots
+./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest assembleRelease
+```
+
+محیط محلی: JDK 17، Android SDK 35، Gradle wrapper 8.9. برای محدودیت حافظهٔ محیط از heap گریدل 1536m، heap تست 1200m، یک worker و Kotlin in-process استفاده شده است؛ این‌ها تنظیمات اجرای محلی‌اند و داخل سورس تحمیل نشده‌اند. امضای محلی فقط با کلید موقت خارج از پروژه است، نه هویت انتشار خصوصی کاربر. کلید موقت پس از اجرا حذف می‌شود.
+
+**این گزارش ادعای اجرای مجدد GitHub Actions در مخزن کاربر یا ساخت کامل native برای همهٔ ABIها در این محیط ندارد.** بررسی Cargo محلی روی lock سورس اصلاح‌شده و کامپایل دو وابستگی TLS است؛ audit پس از ساخت روی lock واقعی native در workflow پابرجاست. APK ساخته‌شدهٔ Gradle به‌تنهایی اثبات سلامت VPN یا وجود همهٔ باینری‌های native نیست.
+
+SOURCE_MANIFEST هنگام بسته‌بندی نهایی برای تمام فایل‌های سورس بازتولید و روی محتوای ZIP بررسی می‌شود؛ پاک‌سازی release tree در checkout موقت جداگانه آزمون می‌شود. نسخهٔ پایه و سیاست موجود versionCode تفکیکی ABI بدون تغییر می‌مانند.

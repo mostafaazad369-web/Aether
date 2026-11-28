@@ -48,7 +48,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import studio.cluvex.aether.ai.AiSession
 import studio.cluvex.aether.core.AetherController
 import studio.cluvex.aether.core.IpEndpoint
 import studio.cluvex.aether.core.NetProbe
@@ -167,11 +166,18 @@ class MainActivity : ComponentActivity() {
         // compareAndSet: if the user already changed something before the
         // initial load finished, never overwrite their edit.
         lifecycleScope.launch {
-            uiProfile.compareAndSet(null, profileStore.profile.first())
+            when (val loaded = profileStore.profileResult.first()) {
+                is ProfileStore.ProfileResult.Available ->
+                    uiProfile.compareAndSet(null, loaded.profile)
+                is ProfileStore.ProfileResult.Failed -> {
+                    profileStorageFailure(loaded.error)
+                    uiProfile.compareAndSet(null, ConnectionProfile())
+                }
+            }
             try {
                 withContext(Dispatchers.IO) { CustomConfigStore.load(applicationContext) }
                 presetMutex.withLock {
-                    presetStore.ensureMigrated(uiProfile.value ?: profileStore.profile.first(),
+                    presetStore.ensureMigrated(uiProfile.value ?: loadProfileOrThrow(),
                         CustomConfigStore.state.value, getString(R.string.preset_default_name),
                         preservedName = getString(R.string.preset_preserved_name))
                 }
@@ -195,8 +201,11 @@ class MainActivity : ComponentActivity() {
                 .collect { snapshot ->
                     try { presetMutex.withLock {
                         if (uiProfile.value != snapshot) return@withLock
-                        profileStore.save(snapshot)
-                        presetStore.syncActive(snapshot, CustomConfigStore.state.value)
+                        when (val saved = profileStore.save(snapshot)) {
+                            ProfileStore.OperationResult.Success ->
+                                presetStore.syncActive(snapshot, CustomConfigStore.state.value)
+                            is ProfileStore.OperationResult.Failed -> profileStorageFailure(saved.error)
+                        }
                     } } catch (e: CancellationException) { throw e
                     } catch (e: Exception) { presetFailure(e) }
                 }
@@ -267,24 +276,6 @@ class MainActivity : ComponentActivity() {
                         "connected" -> {
                             // The service owns exit-IP lookup for the actual Connected.socksAddr.
                             // No 100-second UI wait or fallback to the unrelated engine port.
-                            // Optional AI analysis belongs to the established session.
-                            // Exit-IP metadata is now independently fetched by the service;
-                            // it is not a prerequisite for UI state or analysis of startup logs.
-                            uiProfile.value?.let { current ->
-                                AiSession.analyze(
-                                    profile = current,
-                                    state = AetherController.state.value,
-                                    persian = LanguagePrefs.isPersian(this@MainActivity),
-                                    auto = true,
-                                    onApply = { patched ->
-                                        // The UI owns the profile (see uiProfile), so
-                                        // an AI-applied change goes through exactly
-                                        // the same path a tapped switch does.
-                                        uiProfile.value = patched
-                                        profileSaves.tryEmit(patched)
-                                    },
-                                )
-                            }
                         }
                         "idle" -> {
                             AetherController.setIpInfo(null)
@@ -340,7 +331,7 @@ class MainActivity : ComponentActivity() {
                                     presetAction {
                                         // Save pending edits of the current profile first, then
                                         // import, select and APPLY the imported profile.
-                                        presetStore.syncActive(uiProfile.value ?: profileStore.profile.first(), CustomConfigStore.state.value)
+                                        presetStore.syncActive(uiProfile.value ?: loadProfileOrThrow(), CustomConfigStore.state.value)
                                         presetStore.importPresets(preview, activateFirst = true, custom = CustomConfigStore.state.value)
                                         applyActivePresetLocked()
                                     }
@@ -375,7 +366,7 @@ class MainActivity : ComponentActivity() {
         if (!toggleInFlight.compareAndSet(false, true)) return
         lifecycleScope.launch {
             try {
-                val profile = uiProfile.value ?: profileStore.profile.first()
+                val profile = uiProfile.value ?: loadProfileOrThrow()
                 val consent = AetherController.prepare(this@MainActivity)
                 if (consent != null) {
                     pendingProfile = profile
@@ -423,8 +414,11 @@ class MainActivity : ComponentActivity() {
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runCatching { presetMutex.withLock {
                 if (pending != uiProfile.value) return@withLock
-                profileStore.save(pending)
-                presetStore.syncActive(pending, CustomConfigStore.state.value)
+                when (val saved = profileStore.save(pending)) {
+                    ProfileStore.OperationResult.Success ->
+                        presetStore.syncActive(pending, CustomConfigStore.state.value)
+                    is ProfileStore.OperationResult.Failed -> profileStorageFailure(saved.error)
+                }
             } }.onFailure { DiagnosticsLog.w(UI_TAG, "Profile flush failed: ${it.javaClass.simpleName}") }
         }
     }
@@ -432,6 +426,24 @@ class MainActivity : ComponentActivity() {
     private fun connectionLocked(): Boolean {
         val state = AetherController.state.value
         return state.isConnected || state.isBusy || toggleInFlight.get() || presetBusy.value
+    }
+
+    private suspend fun loadProfileOrThrow(): ConnectionProfile =
+        when (val result = profileStore.profileResult.first()) {
+            is ProfileStore.ProfileResult.Available -> result.profile
+            is ProfileStore.ProfileResult.Failed -> {
+                profileStorageFailure(result.error)
+                throw ProfileStore.ProfileStorageException(result.error)
+            }
+        }
+
+    private fun profileStorageFailure(error: ProfileStore.StorageError) {
+        val message = when (error) {
+            ProfileStore.StorageError.KEY_UNAVAILABLE -> R.string.profile_storage_key_unavailable
+            ProfileStore.StorageError.CORRUPT_DATA -> R.string.profile_storage_corrupt
+            ProfileStore.StorageError.STORAGE_FAILURE -> R.string.profile_storage_failure
+        }
+        Toast.makeText(this, getString(message), Toast.LENGTH_LONG).show()
     }
 
     private fun presetFailure(e: Exception) {
@@ -454,12 +466,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyPreset(id: String) = presetAction {
-        presetStore.syncActive(uiProfile.value ?: profileStore.profile.first(), CustomConfigStore.state.value)
+        presetStore.syncActive(uiProfile.value ?: loadProfileOrThrow(), CustomConfigStore.state.value)
         if (presetStore.setActive(id) != null) applyActivePresetLocked()
     }
 
     private fun savePresetAs(name: String) = presetAction {
-        val current = uiProfile.value ?: profileStore.profile.first()
+        val current = uiProfile.value ?: loadProfileOrThrow()
         presetStore.syncActive(current, CustomConfigStore.state.value)
         check(presetStore.saveAsNew(name, current, CustomConfigStore.state.value) != null)
     }
@@ -475,15 +487,19 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun applyActivePresetLocked() {
         val preset = presetStore.snapshot().active ?: return
-        val current = uiProfile.value ?: profileStore.profile.first()
+        val current = uiProfile.value ?: loadProfileOrThrow()
         val merged = PresetProfileCodec.decode(preset.profile).copy(
             accessClientSecret = current.accessClientSecret, accessToken = current.accessToken,
             accessSignInToken = current.accessSignInToken,
             chainedStage = false, bindOverride = 0, enginePsiphonOnly = false)
-        uiProfile.value = merged
-        profileStore.save(merged)
-        applyCustomSelection(preset)
-        profileSaves.tryEmit(merged)
+        when (val saved = profileStore.save(merged)) {
+            ProfileStore.OperationResult.Success -> {
+                uiProfile.value = merged
+                applyCustomSelection(preset)
+                profileSaves.tryEmit(merged)
+            }
+            is ProfileStore.OperationResult.Failed -> profileStorageFailure(saved.error)
+        }
     }
 
     private fun applyCustomSelection(preset: ConnectionPreset) {
@@ -522,11 +538,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportPresets(uri: Uri) = presetAction {
-        presetStore.syncActive(uiProfile.value ?: profileStore.profile.first(), CustomConfigStore.state.value)
+        presetStore.syncActive(uiProfile.value ?: loadProfileOrThrow(), CustomConfigStore.state.value)
         // Export the selected named preset, not an implicit backup of every preset.
         // Import remains compatible with older multi-preset files.
         val selected = checkNotNull(presetStore.captureActiveForExport(
-            uiProfile.value ?: profileStore.profile.first(), CustomConfigStore.state.value))
+            uiProfile.value ?: loadProfileOrThrow(), CustomConfigStore.state.value))
         val text = PresetTransferCodec.encodeSelected(listOf(selected), selected.id)
         withContext(Dispatchers.IO) {
             val stream = contentResolver.openOutputStream(uri, "wt") ?: error("Cannot write settings")

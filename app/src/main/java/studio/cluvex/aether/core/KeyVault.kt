@@ -9,8 +9,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * The app's file-at-rest vault: one hardware-backed AES-256-GCM key, used to
- * seal FILES the app owns.
+ * The app's file-at-rest vault: one AES-256-GCM key managed by Android Keystore,
+ * used to seal files the app owns. Android may keep the key in secure hardware,
+ * but hardware backing is device-dependent and is not required by this implementation.
  *
  * ## Why this exists (audit 1.2.9-r3, findings F-2 and F-3)
  *
@@ -25,13 +26,14 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * App-private storage and `allowBackup="false"` protect both against other apps
  * and against cloud/adb backup, which is why neither was ever critical. Neither
- * survives the threat model this app is actually shipped into: a rooted phone, a
- * seized phone, or a forensic image. On any of those, reading `/data/data/...` is
- * a `cat`.
+ * is not a complete defence against a rooted or already-compromised running
+ * device. An attacker with sufficient privileges may invoke Keystore operations
+ * or inspect plaintext while the app is using it; hardware isolation, when
+ * available, depends on the device and its Android implementation.
  *
  * ## Design
  *
- * The key is generated inside the Android Keystore, marked non-exportable, and
+ * The key is generated and managed by Android Keystore, marked non-exportable, and
  * NOT bound to user authentication - the VPN has to be able to reconnect
  * unattended (boot, network change), and a key that needs a keyguard unlock would
  * make an auto-reconnect impossible rather than making it safer. What it buys is

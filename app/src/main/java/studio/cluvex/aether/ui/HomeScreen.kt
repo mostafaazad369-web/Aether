@@ -1,6 +1,5 @@
 package studio.cluvex.aether.ui
 
-import studio.cluvex.aether.ai.AiTopic
 import studio.cluvex.aether.model.ConnectionPreset
 import studio.cluvex.aether.ui.components.PresetSelector
 import studio.cluvex.aether.ui.components.FitLineText
@@ -14,13 +13,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
-import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
@@ -32,28 +34,31 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
-import studio.cluvex.aether.ai.AiSession
-import studio.cluvex.aether.ui.ai.AiHostContext
-import studio.cluvex.aether.ui.ai.LocalAiHost
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import studio.cluvex.aether.R
 import studio.cluvex.aether.core.IpEndpoint
+import studio.cluvex.aether.custom.CustomConfigStore
 import studio.cluvex.aether.model.ConnectionProfile
 import studio.cluvex.aether.model.ConnectionState
 import studio.cluvex.aether.model.isBusy
@@ -71,6 +76,7 @@ import studio.cluvex.aether.ui.settings.SettingsHost
 import studio.cluvex.aether.ui.settings.SettingsNavRow
 import studio.cluvex.aether.ui.settings.SettingsRoute
 import studio.cluvex.aether.ui.theme.AetherMint
+import studio.cluvex.aether.ui.theme.AetherError
 import studio.cluvex.aether.ui.theme.AetherViolet
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,15 +101,10 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     var route by remember { mutableStateOf<SettingsRoute?>(null) }
-    val aiSettings by AiSession.settings.collectAsState()
     val context = LocalContext.current
+    LaunchedEffect(context) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { CustomConfigStore.load(context) } }
     val homeAnimationsEnabled by VisualPrefs.homeAnimationsFlow(context).collectAsState()
-    CompositionLocalProvider(
-        LocalHomeAnimationsEnabled provides homeAnimationsEnabled,
-        LocalAiHost provides AiHostContext(profile, state, aiSettings.showHints,
-            openAiSettings = { route = SettingsRoute.AI }, openConnection = { route = SettingsRoute.CONNECTION },
-            openChat = { route = SettingsRoute.AI_CHAT }),
-    ) {
+    CompositionLocalProvider(LocalHomeAnimationsEnabled provides homeAnimationsEnabled) {
     studio.cluvex.aether.ui.components.HomeSettingsHost(route == null, modifier.fillMaxSize(), home = {
         HomeSurface(state, profile, connectedSince, ipInfo, ipLoading, onProfileChange, onToggleConnection,
             presets, activePresetId, onSelectPreset, onSavePresetAs, onDeletePreset, onRenamePreset, onImportPresets, onExportPresets,
@@ -136,6 +137,8 @@ private fun HomeSurface(
     onOpenSettings: (SettingsRoute) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val customConfigState by CustomConfigStore.state.collectAsState()
+    val activeCustomConfig = customConfigState.active
     val mode = when {
         state.isConnected -> ButtonMode.CONNECTED
         state.isBusy -> ButtonMode.BUSY
@@ -144,11 +147,10 @@ private fun HomeSurface(
     }
 
     val accent = when (mode) {
-        // Brand mint, the same accent the connection card and its animated edge
-        // use, so the whole screen reads as one palette.
+        // Keep the home backdrop in sync with the semantic state accents.
         ButtonMode.CONNECTED -> AetherMint
-        ButtonMode.ERROR -> Color(0xFFFF5C7A)
-        else -> Color(0xFF5B93FF)
+        ButtonMode.ERROR -> AetherError
+        else -> AetherViolet
     }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -191,32 +193,10 @@ private fun HomeSurface(
                         drawerScope.launch { drawerState.close() }
                     }
 
-                    // 1.2.9 AI: its own group at the top of the menu. The
-                    // assistant is not a setting, it is a place you go - and a
-                    // feature nobody can find is a feature that does not exist.
-                    SettingsGroup {
-                        SettingsNavRow(
-                            aiTopic = AiTopic.AI_CHAT,
-                            title = stringResource(R.string.ai_title),
-                            summary = stringResource(R.string.ai_subtitle),
-                            icon = Icons.Rounded.AutoAwesome,
-                            onClick = { go(SettingsRoute.AI) },
-                        )
-                        RowDivider()
-                        SettingsNavRow(
-                            aiTopic = AiTopic.AI_CHAT,
-                            title = stringResource(R.string.ai_chat_open),
-                            summary = stringResource(R.string.ai_chat_subtitle),
-                            icon = Icons.Rounded.Chat,
-                            onClick = { go(SettingsRoute.AI_CHAT) },
-                        )
-                    }
-
                     Spacer(Modifier.height(14.dp))
 
                     SettingsGroup {
                         SettingsNavRow(
-                            aiTopic = AiTopic.SETTINGS,
                             title = stringResource(R.string.settings_title),
                             summary = stringResource(R.string.settings_subtitle),
                             icon = Icons.Rounded.Settings,
@@ -224,7 +204,6 @@ private fun HomeSurface(
                         )
                         RowDivider()
                         SettingsNavRow(
-                            aiTopic = AiTopic.DIAGNOSTICS,
                             title = stringResource(R.string.diag_title),
                             summary = stringResource(R.string.diag_subtitle),
                             icon = Icons.Rounded.BugReport,
@@ -232,7 +211,6 @@ private fun HomeSurface(
                         )
                         RowDivider()
                         SettingsNavRow(
-                            aiTopic = AiTopic.SHARE,
                             title = stringResource(R.string.share_title),
                             summary = stringResource(R.string.share_subtitle),
                             icon = Icons.Rounded.Wifi,
@@ -240,7 +218,6 @@ private fun HomeSurface(
                         )
                         RowDivider()
                         SettingsNavRow(
-                            aiTopic = AiTopic.ABOUT,
                             title = stringResource(R.string.about_title),
                             summary = stringResource(R.string.about_subtitle),
                             icon = Icons.Rounded.Info,
@@ -270,18 +247,103 @@ private fun HomeSurface(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Top,
                 ) {
-                    FitLineText(text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.fillMaxWidth())
-                    FitLineText(text = stringResource(R.string.tagline),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth())
+                    // Brand lockup and a live, engine-backed state indicator.
+                    // This replaces the two centred title lines without adding
+                    // vertical height to the FitToHeight content budget.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            FitLineText(
+                                text = stringResource(R.string.app_name),
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            FitLineText(
+                                text = stringResource(R.string.tagline),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(accent),
+                            )
+                            Text(
+                                text = stateTitle(state),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
 
                     run {
                         Spacer(Modifier.height(6.dp))
-                        PresetSelector(presets, activePresetId, presets.isEmpty() || state.isConnected || state.isBusy || presetBusy || !studio.cluvex.aether.ui.components.LocalHomeVisible.current,
-                            onSelectPreset, onSavePresetAs, onDeletePreset,
-                            onImport = onImportPresets, onExport = onExportPresets, onRename = onRenamePreset)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PresetSelector(
+                                presets, activePresetId,
+                                presets.isEmpty() || state.isConnected || state.isBusy || presetBusy || !studio.cluvex.aether.ui.components.LocalHomeVisible.current,
+                                onSelectPreset, onSavePresetAs, onDeletePreset,
+                                onImport = onImportPresets, onExport = onExportPresets, onRename = onRenamePreset,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable(role = Role.Button) { onOpenSettings(SettingsRoute.CUSTOM_CONFIGS) },
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Route,
+                                        contentDescription = stringResource(R.string.cc_title),
+                                        tint = if (customConfigState.enabled && activeCustomConfig != null)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        text = if (customConfigState.enabled && activeCustomConfig != null) {
+                                            activeCustomConfig.protocol.short
+                                        } else {
+                                            stringResource(R.string.cc_off)
+                                        },
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
 
@@ -322,18 +384,7 @@ private fun HomeSurface(
                 )
             }
 
-            // Top-end corner: the AI chat and the tunnel shortcut, in that order.
-            //
-            // 1.2.9: the SHORTCUT to the tunnel settings - Connection, Transport &
-            // anti-DPI, DNS & routing, Upstream proxy, and the reset action. The
-            // full settings tree lives in the drawer (top start), which is where
-            // every other group belongs; this icon used to open that same tree.
-            //
-            // The AI button sits beside it rather than anywhere in the middle of the
-            // screen on purpose: the home screen is measured by FitToHeight and
-            // scaled to fit exactly, so ANY new element inside that subtree shrinks
-            // the connect button on small phones. Both icons live outside it, in the
-            // inset padding, where they cost the layout nothing.
+            // Keep the tunnel shortcut outside the scaled content so it does not shrink the connect button.
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -341,13 +392,6 @@ private fun HomeSurface(
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { onOpenSettings(SettingsRoute.AI_CHAT) }) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = stringResource(R.string.ai_title),
-                        tint = AetherViolet,
-                    )
-                }
                 IconButton(onClick = { onOpenSettings(SettingsRoute.QUICK) }) {
                     Icon(
                         imageVector = Icons.Rounded.Tune,

@@ -24,6 +24,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -76,9 +77,7 @@ class SocksTunBridge(
 ) {
     data class Stats(val txBytes: Long = 0, val rxBytes: Long = 0)
 
-    private val isRunning = AtomicBoolean(false)
-    private var readThread: Thread? = null
-    private var writeThread: Thread? = null
+    private val workerGroup = BridgeWorkerGroup()
     private val executor = Executors.newCachedThreadPool()
     private val tunOutputQueue = LinkedBlockingQueue<ByteArray>(32768)
     private val tcpSessions = ConcurrentHashMap<FlowKey, TcpSession>()
@@ -106,78 +105,136 @@ class SocksTunBridge(
     )
 
     fun start() {
-        if (isRunning.getAndSet(true)) return
-
         LogRepository.i("Initializing tunnel bridge (MTU=$mtu)...")
 
-        writeThread = Thread({
-            val fos = FileOutputStream(tunDescriptor.fileDescriptor)
-            while (isRunning.get()) {
-                try {
-                    val packet = tunOutputQueue.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                    fos.write(packet)
-                    rxBytes.addAndGet(packet.size.toLong())
-                } catch (_: InterruptedException) {
-                    break
-                } catch (e: Exception) {
-                    if (isRunning.get()) LogRepository.w("TUN write error: ${e.message}")
+        val writer = Thread({
+            try {
+                // These stream wrappers deliberately do not close the shared TUN fd.
+                val output = FileOutputStream(tunDescriptor.fileDescriptor)
+                while (workerGroup.isRunning) {
+                    val packet = try {
+                        tunOutputQueue.poll(500, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        break
+                    } ?: continue
+                    try {
+                        output.write(packet)
+                        rxBytes.addAndGet(packet.size.toLong())
+                    } catch (e: Exception) {
+                        if (workerGroup.isRunning) LogRepository.w("TUN write error: ${e.message}")
+                        break
+                    }
                 }
+            } catch (e: Exception) {
+                if (workerGroup.isRunning) LogRepository.w("TUN writer failed: ${e.message}")
+            } finally {
+                if (workerGroup.isRunning) stop()
             }
         }, "Aether-TunWriter").apply {
             priority = Thread.MAX_PRIORITY
             isDaemon = true
-            start()
         }
 
-        readThread = Thread({
-            val fis = FileInputStream(tunDescriptor.fileDescriptor)
-            val buffer = ByteArray(mtu + 200)
-            waitForCore()
-            while (isRunning.get()) {
-                try {
-                    val n = fis.read(buffer)
-                    if (n <= 0) continue
-                    txBytes.addAndGet(n.toLong())
-                    processPacket(buffer, n)
-                } catch (e: Exception) {
-                    if (isRunning.get()) LogRepository.w("TUN read error: ${e.message}")
+        val reader = Thread({
+            try {
+                // The VPN service owns tunDescriptor and closes it after bridge teardown.
+                val input = FileInputStream(tunDescriptor.fileDescriptor)
+                val buffer = ByteArray(mtu + 200)
+                waitForCore()
+                while (workerGroup.isRunning) {
+                    val count = try {
+                        input.read(buffer)
+                    } catch (e: Exception) {
+                        if (workerGroup.isRunning) LogRepository.w("TUN read error: ${e.message}")
+                        break
+                    }
+                    if (count <= 0) break
+                    txBytes.addAndGet(count.toLong())
+                    processPacket(buffer, count)
                 }
+            } catch (e: Exception) {
+                if (workerGroup.isRunning) LogRepository.w("TUN reader failed: ${e.message}")
+            } finally {
+                if (workerGroup.isRunning) stop()
             }
         }, "Aether-TunReader").apply {
             priority = Thread.MAX_PRIORITY
             isDaemon = true
-            start()
+        }
+
+        try {
+            workerGroup.start(listOf(writer, reader))
+        } catch (failure: Throwable) {
+            stop()
+            throw failure
         }
     }
 
     fun stop() {
-        if (!isRunning.getAndSet(false)) return
+        // Stop packet intake before tearing down flow sessions. The VPN service
+        // remains the sole owner of the TUN descriptor and closes it afterwards.
+        val workersStopped = workerGroup.stop()
+        closeSessions()
+        executor.shutdownNow()
+
+        val sessionsStopped = try {
+            executor.awaitTermination(500, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+
+        // A packet already being dispatched when shutdown began may have raced
+        // the first sweep. Reap any such late session after the executor settles.
+        closeSessions()
+        if (!workersStopped) {
+            LogRepository.w("TUN worker did not exit within the bounded stop wait; descriptor owner must close the TUN")
+        }
+        if (!sessionsStopped) {
+            LogRepository.w("TUN flow workers did not exit within the bounded stop wait")
+        }
+    }
+
+    private fun closeSessions() {
         tcpSessions.values.forEach { it.close() }
         tcpSessions.clear()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
-        executor.shutdownNow()
-        readThread?.interrupt()
-        writeThread?.interrupt()
+    }
+
+    private fun executeSession(task: () -> Unit, onRejected: () -> Unit) {
+        try {
+            executor.execute { task() }
+        } catch (_: RejectedExecutionException) {
+            // Stop may shut down the executor while the reader is dispatching a
+            // final packet. Do not leave its just-created session in the maps.
+            onRejected()
+        }
     }
 
     fun getStats(): Stats = Stats(txBytes.get(), rxBytes.get())
 
     private fun waitForCore() {
-        var ready = false
-        repeat(25) {
+        repeat(25) { attempt ->
+            if (!workerGroup.isRunning) return
             try {
-                Socket().use { s ->
-                    runCatching { vpnService.protect(s) }
-                    s.connect(InetSocketAddress(socksHost, socksPort), 200)
+                Socket().use { socket ->
+                    runCatching { vpnService.protect(socket) }
+                    socket.connect(InetSocketAddress(socksHost, socksPort), 200)
                 }
-                ready = true
-                return@repeat
+                LogRepository.i("Link synchronization complete")
+                return
             } catch (_: Exception) {
-                Thread.sleep(200)
+                if (attempt < 24 && workerGroup.isRunning) {
+                    try {
+                        Thread.sleep(200)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return
+                    }
+                }
             }
         }
-        if (ready) LogRepository.i("Link synchronization complete")
     }
 
     private fun enqueueTun(data: ByteArray, critical: Boolean = false) {
@@ -267,7 +324,10 @@ class SocksTunBridge(
                 val seq = getLong(packet, hLen + 4)
                 val newSession = TcpSession(key, 4, srcBytes, dstBytes, srcPort, dstPort, seq, uid)
                 tcpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    tcpSessions.remove(key, newSession)
+                    newSession.close()
+                }
             }
         } else {
             if (len < hLen + 8) return
@@ -320,7 +380,10 @@ class SocksTunBridge(
 
                 val newSession = UdpSession(key, 4, srcBytes, dstBytes, srcPort, dstPort, uid)
                 udpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    udpSessions.remove(key, newSession)
+                    newSession.close()
+                }
                 newSession.queue(payload)
             }
         }
@@ -390,7 +453,10 @@ class SocksTunBridge(
                 val seq = getLong(packet, offset + 4)
                 val newSession = TcpSession(key, 6, srcIp, dstIp, srcPort, dstPort, seq, uid)
                 tcpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    tcpSessions.remove(key, newSession)
+                    newSession.close()
+                }
             }
         } else if (transport.nextHeader == 17) {
             if (len < offset + 8) return
@@ -438,7 +504,10 @@ class SocksTunBridge(
 
                 val newSession = UdpSession(key, 6, srcIp, dstIp, srcPort, dstPort, uid)
                 udpSessions[key] = newSession
-                executor.execute { newSession.run() }
+                executeSession({ newSession.run() }) {
+                    udpSessions.remove(key, newSession)
+                    newSession.close()
+                }
                 newSession.queue(payload)
             }
         }
@@ -722,7 +791,7 @@ class SocksTunBridge(
 
                 executor.execute { readFromSocks(ins) }
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val data = queue.poll(2, TimeUnit.SECONDS)
 
                     if (data == null) {
@@ -755,7 +824,7 @@ class SocksTunBridge(
                     }
                 }
             } catch (exception: Exception) {
-                if (isRunning.get() && !isClosed.get()) {
+                if (workerGroup.isRunning && !isClosed.get()) {
                     LogRepository.w("[Routing] TCP session failed: ${exception.localizedMessage}")
                 }
             } finally {
@@ -768,7 +837,7 @@ class SocksTunBridge(
                 val buffer = ByteArray(131072)
                 val maxPayload = if (version == 4) (mtu - 40).coerceAtLeast(20) else (mtu - 60).coerceAtLeast(20)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val n = ins.read(buffer)
 
                     if (n <= 0) {
@@ -911,7 +980,7 @@ class SocksTunBridge(
 
                 val relayAddress = InetSocketAddress(relayHost, relayPort)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     val payload = payloadQueue.poll(2, TimeUnit.SECONDS)
 
                     if (payload == null) {
@@ -935,7 +1004,7 @@ class SocksTunBridge(
                     lastActivity.set(SystemClock.elapsedRealtime())
                 }
             } catch (exception: Exception) {
-                if (isRunning.get() && !isClosed.get()) {
+                if (workerGroup.isRunning && !isClosed.get()) {
                     LogRepository.w("[Routing] UDP session failed: ${exception.localizedMessage}")
                 }
             } finally {
@@ -948,7 +1017,7 @@ class SocksTunBridge(
                 val buf = ByteArray(65535)
                 val maxPayload = if (version == 4) (mtu - 28).coerceAtLeast(8) else (mtu - 48).coerceAtLeast(8)
 
-                while (!isClosed.get() && isRunning.get()) {
+                while (!isClosed.get() && workerGroup.isRunning) {
                     try {
                         val packet = DatagramPacket(buf, buf.size)
                         sock.receive(packet)

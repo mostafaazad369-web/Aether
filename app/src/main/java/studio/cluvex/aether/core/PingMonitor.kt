@@ -18,6 +18,9 @@ data class PingResult(val ms: Long = -1L, val running: Boolean = false, val erro
 object PingMonitor {
     private val _state = MutableStateFlow(PingResult())
     val state: StateFlow<PingResult> = _state.asStateFlow()
+    // Bounded real probe history for latency/loss details; -1 records a lost probe.
+    private val _history = MutableStateFlow<List<Long>>(emptyList())
+    val history: StateFlow<List<Long>> = _history.asStateFlow()
     private val mutex = Mutex()
     private var tunnelPort = PortLease.socks
     private var epoch = 0L
@@ -36,6 +39,7 @@ object PingMonitor {
         epoch++
         session?.close(); session = null
         _state.value = PingResult()
+        _history.value = emptyList()
     }
 
     suspend fun pingOnce(viaTunnel: Boolean) {
@@ -57,12 +61,16 @@ object PingMonitor {
                     // by that attempt's retry, never retain it after the tunnel is gone.
                     snapshot.second.close()
                 } else {
-                    _state.value = when (result) {
-                        is RealDelay.Result.Ok -> PingResult(ms = result.ms)
-                        else -> PingResult(error = true)
+                    val measured = when (result) {
+                        is RealDelay.Result.Ok -> result.ms
+                        else -> -1L
                     }
+                    _state.value = if (measured >= 0L) PingResult(ms = measured) else PingResult(error = true)
+                    _history.value = (_history.value + measured).takeLast(MAX_HISTORY)
                 }
             }
         } finally { mutex.unlock() }
     }
+
+    private const val MAX_HISTORY = 60
 }

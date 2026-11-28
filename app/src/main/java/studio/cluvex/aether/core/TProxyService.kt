@@ -20,9 +20,10 @@ import android.util.Log
  * hev) kept working.
  *
  * libaethertun.so removes that failure mode categorically:
- *  - It binds ONLY hev's stable public C API (hev_socks5_tunnel_main/quit/
- *    stats), which is resolved at LINK time in CI (-Wl,--no-undefined) — any
- *    upstream break fails the BUILD, never the user's device.
+ *  - It binds HEV's public C API plus Aether's pinned ready-callback and
+ *    generation-scoped stop entry points. Those symbols are resolved at LINK
+ *    time (-Wl,--no-undefined), so
+ *    an upstream drift fails the native build rather than the user's device.
  *  - It exports conventional Java_* symbols that WE control, matching the
  *    external declarations below exactly (also verified at build time).
  *  - It defines its own JNI_OnLoad. ART finds JNI_OnLoad via dlsym() on the
@@ -82,8 +83,8 @@ object TProxyService {
 
     /**
      * Starts the tunnel event loop on a native pthread created by the bridge.
-     * Returns true when the tunnel thread was spawned (or is already running),
-     * false when spawning failed.
+     * Returns true when a generation was accepted (or is already starting/running),
+     * false when the TUN descriptor could not be duplicated or spawning failed.
      */
     @JvmStatic
     @Suppress("FunctionName")
@@ -92,6 +93,11 @@ object TProxyService {
     @JvmStatic
     @Suppress("FunctionName")
     external fun TProxyStopService()
+
+    /** True while a native generation is starting, running, or draining. */
+    @JvmStatic
+    @Suppress("FunctionName")
+    external fun TProxyIsActive(): Boolean
 
     /** [tx_packets, tx_bytes, rx_packets, rx_bytes] from hev's stats API. */
     @JvmStatic

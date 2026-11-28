@@ -36,15 +36,15 @@ val Navy600 = Color(0xFF2B3C63)
 // ---- Accents -------------------------------------------------------------
 
 /** Primary action / selected state. */
-val AetherBlue = Color(0xFF5B93FF)
+val AetherBlue = Color(0xFF9B8CFF)
 /** Container tint behind a primary icon. */
-val AetherBlueDim = Color(0xFF1B2C52)
+val AetherBlueDim = Color(0xFF2A2052)
 /** The connected accent, shared with the card's travelling edge. */
-val AetherMint = Color(0xFF3EDBB0)
+val AetherMint = Color(0xFF35E6D0)
 val AetherMintDim = Color(0xFF10322C)
 /** Second light of the animated card edge, cooler than the mint. */
-val AetherGlowCyan = Color(0xFF35D0E8)
-val AetherCyan = Color(0xFF32E0C4)
+val AetherGlowCyan = Color(0xFF36DDF2)
+val AetherCyan = Color(0xFF45F0DB)
 val AetherError = Color(0xFFFF5C7A)
 val AetherErrorDim = Color(0xFF3A1522)
 /** Warning / "fair" quality. */

@@ -48,6 +48,16 @@ class AetherServiceIntegrationTest {
         val method=AetherVpnService::class.java.getDeclaredMethod("customUpstreamPlan",ConnectionProfile::class.java)
         method.isAccessible=true;return method.invoke(service,profile) as List<AutoCandidate>
     }
+    @Test fun missingLockdownTunDescriptorIsRejected() {
+        val error = try {
+            service.requireLockdownTun(null)
+            fail("A missing TUN descriptor must not be treated as an active kill switch")
+            return
+        } catch (e: IllegalStateException) {
+            e
+        }
+        assertTrue(error.message!!.contains("did not establish"))
+    }
     @Test fun sameEpochAndIpReceiveCountryAndAlternateFamily() {
         enrich(42,"192.0.2.1","DE","2001:db8::1")
         assertEquals(IpEndpoint("192.0.2.1","DE",true,"2001:db8::1"),AetherController.ipInfo.value)

@@ -6,9 +6,11 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import studio.cluvex.aether.model.ConnectionProfile
 import studio.cluvex.aether.model.CoreLogLevel
@@ -27,6 +29,22 @@ private val Context.dataStore by preferencesDataStore(name = "aether_profile")
 
 /** Persists the last-used [ConnectionProfile] with Jetpack DataStore. */
 class ProfileStore(private val context: Context) {
+
+    enum class StorageError { KEY_UNAVAILABLE, CORRUPT_DATA, STORAGE_FAILURE }
+
+    sealed interface ProfileResult {
+        data class Available(val profile: ConnectionProfile) : ProfileResult
+        data class Failed(val error: StorageError) : ProfileResult
+    }
+
+    sealed interface OperationResult {
+        data object Success : OperationResult
+        data class Failed(val error: StorageError) : OperationResult
+    }
+
+    class ProfileStorageException(val error: StorageError) :
+        IllegalStateException("Profile credential storage failed: $error")
+
     private object Keys {
         val backend = stringPreferencesKey("transportBackend")
         // Added in 1.3.0 (engine core 2.0.0: Tor)
@@ -125,9 +143,23 @@ class ProfileStore(private val context: Context) {
      */
     private val secrets = SecretStore(context)
 
-    val profile: Flow<ConnectionProfile> = context.dataStore.data.map { prefs ->
+    val profileResult: Flow<ProfileResult> = context.dataStore.data.map { prefs ->
+        val accessSecret = when (val result = secrets.readResult(SecretStore.ACCESS_SECRET)) {
+            SecretStore.ReadResult.Missing -> ""
+            is SecretStore.ReadResult.Value -> result.value
+            is SecretStore.ReadResult.KeyUnavailable -> return@map ProfileResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.ReadResult.CorruptData -> return@map ProfileResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.ReadResult.StorageFailure -> return@map ProfileResult.Failed(StorageError.STORAGE_FAILURE)
+        }
+        val accessToken = when (val result = secrets.readResult(SecretStore.ACCESS_TOKEN)) {
+            SecretStore.ReadResult.Missing -> ""
+            is SecretStore.ReadResult.Value -> result.value
+            is SecretStore.ReadResult.KeyUnavailable -> return@map ProfileResult.Failed(StorageError.KEY_UNAVAILABLE)
+            is SecretStore.ReadResult.CorruptData -> return@map ProfileResult.Failed(StorageError.CORRUPT_DATA)
+            is SecretStore.ReadResult.StorageFailure -> return@map ProfileResult.Failed(StorageError.STORAGE_FAILURE)
+        }
         val d = ConnectionProfile()
-        ConnectionProfile(
+        ProfileResult.Available(ConnectionProfile(
             // fromStoredName migrates the retired backend names (see
             // TransportBackend): the single-hop PSIPHON of 1.2.6 becomes the
             // chained mode, so a saved profile keeps the exit the user picked,
@@ -179,9 +211,9 @@ class ProfileStore(private val context: Context) {
             teamAuth = prefs[Keys.teamAuth]
                 ?.let { runCatching { TeamAuth.valueOf(it) }.getOrNull() } ?: TeamAuth.OFF,
             accessClientId = prefs[Keys.accessId] ?: "",
-            accessClientSecret = secrets.read(SecretStore.ACCESS_SECRET),
+            accessClientSecret = accessSecret,
             accessEmail = prefs[Keys.accessEmail] ?: "",
-            accessToken = secrets.read(SecretStore.ACCESS_TOKEN),
+            accessToken = accessToken,
             gateway = prefs[Keys.gateway] ?: false,
             routeBlock = prefs[Keys.routeBlock] ?: "",
             routeDirect = prefs[Keys.routeDirect] ?: "",
@@ -242,11 +274,40 @@ class ProfileStore(private val context: Context) {
             // and still wins; the new default only applies where the key was never
             // written. See ConnectionProfile.fastEndpointOnly for why.
             fastEndpointOnly = prefs[Keys.fastEndpointOnly] ?: false,
-        )
+        ))
+    }.catch { error ->
+        if (error is CancellationException) throw error
+        emit(ProfileResult.Failed(StorageError.STORAGE_FAILURE))
     }.flowOn(Dispatchers.IO)
 
-    suspend fun save(profile: ConnectionProfile) {
-        context.dataStore.edit { prefs ->
+    /** Compatibility stream that fails explicitly rather than emitting blank credentials. */
+    val profile: Flow<ConnectionProfile> = profileResult.map { result ->
+        when (result) {
+            is ProfileResult.Available -> result.profile
+            is ProfileResult.Failed -> throw ProfileStorageException(result.error)
+        }
+    }
+
+    suspend fun save(profile: ConnectionProfile): OperationResult {
+        val previousSecret = secrets.readResult(SecretStore.ACCESS_SECRET)
+        val previousToken = secrets.readResult(SecretStore.ACCESS_TOKEN)
+        readFailure(previousSecret)?.let { return OperationResult.Failed(it) }
+        readFailure(previousToken)?.let { return OperationResult.Failed(it) }
+
+        when (val result = secrets.writeResult(SecretStore.ACCESS_SECRET, profile.accessClientSecret)) {
+            SecretStore.WriteResult.Saved, SecretStore.WriteResult.Cleared -> Unit
+            else -> return OperationResult.Failed(writeFailure(result))
+        }
+        when (val result = secrets.writeResult(SecretStore.ACCESS_TOKEN, profile.accessToken)) {
+            SecretStore.WriteResult.Saved, SecretStore.WriteResult.Cleared -> Unit
+            else -> {
+                restoreSecret(SecretStore.ACCESS_SECRET, previousSecret)
+                return OperationResult.Failed(writeFailure(result))
+            }
+        }
+
+        return try {
+            context.dataStore.edit { prefs ->
             prefs[Keys.backend] = profile.backend.name
             prefs[Keys.exitRegion] = profile.exitRegion.uppercase()
             prefs[Keys.torBridges] = profile.torBridges.name
@@ -325,12 +386,48 @@ class ProfileStore(private val context: Context) {
             prefs[Keys.routeSniffMs] = profile.routeSniffMs
             prefs[Keys.autoReprovision] = profile.autoReprovision
             prefs[Keys.fastEndpointOnly] = profile.fastEndpointOnly
+            }
+            OperationResult.Success
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            restoreSecret(SecretStore.ACCESS_SECRET, previousSecret)
+            restoreSecret(SecretStore.ACCESS_TOKEN, previousToken)
+            OperationResult.Failed(StorageError.STORAGE_FAILURE)
         }
-        // Secrets go to the Keystore-sealed store, never to the prefs file.
-        secrets.write(SecretStore.ACCESS_SECRET, profile.accessClientSecret)
-        secrets.write(SecretStore.ACCESS_TOKEN, profile.accessToken)
     }
 
     /** Wipes the sealed Zero Trust secrets (used by "Reset settings"). */
-    fun clearSecrets() = secrets.clear()
+    fun clearSecrets(): OperationResult {
+        // Cleanup is an explicit destructive action: it must still be possible
+        // to remove ciphertext that can no longer be decrypted.
+        when (val result = secrets.clearResult(SecretStore.ACCESS_SECRET)) {
+            SecretStore.WriteResult.Cleared -> Unit
+            else -> return OperationResult.Failed(writeFailure(result))
+        }
+        return when (val result = secrets.clearResult(SecretStore.ACCESS_TOKEN)) {
+            SecretStore.WriteResult.Cleared -> OperationResult.Success
+            else -> OperationResult.Failed(writeFailure(result))
+        }
+    }
+
+    private fun readFailure(result: SecretStore.ReadResult): StorageError? = when (result) {
+        SecretStore.ReadResult.Missing, is SecretStore.ReadResult.Value -> null
+        is SecretStore.ReadResult.KeyUnavailable -> StorageError.KEY_UNAVAILABLE
+        is SecretStore.ReadResult.CorruptData -> StorageError.CORRUPT_DATA
+        is SecretStore.ReadResult.StorageFailure -> StorageError.STORAGE_FAILURE
+    }
+
+    private fun writeFailure(result: SecretStore.WriteResult): StorageError = when (result) {
+        is SecretStore.WriteResult.KeyUnavailable -> StorageError.KEY_UNAVAILABLE
+        is SecretStore.WriteResult.CorruptData -> StorageError.CORRUPT_DATA
+        SecretStore.WriteResult.Saved, SecretStore.WriteResult.Cleared,
+        is SecretStore.WriteResult.StorageFailure -> StorageError.STORAGE_FAILURE
+    }
+
+    private fun restoreSecret(name: String, previous: SecretStore.ReadResult): Boolean = when (previous) {
+        SecretStore.ReadResult.Missing -> secrets.clearResult(name) == SecretStore.WriteResult.Cleared
+        is SecretStore.ReadResult.Value ->
+            secrets.writeResult(name, previous.value) == SecretStore.WriteResult.Saved
+        else -> false
+    }
 }

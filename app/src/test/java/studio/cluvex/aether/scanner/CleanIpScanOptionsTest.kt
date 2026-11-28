@@ -43,6 +43,26 @@ class CleanIpScanOptionsTest {
         assertFalse(CleanIpScanManager.options(context).manual)
     }
 
+    @Test fun scanProfileNamesAreCaseInsensitiveAndTrimmed() {
+        assertEquals(ScanProfile.FAST, ScanProfile.fromName(" fast "))
+        assertEquals(ScanProfile.DEEP, ScanProfile.fromName("deep"))
+        assertEquals(ScanProfile.BALANCED, ScanProfile.fromName("BaLaNcEd"))
+    }
+
+    @Test fun unknownOrMissingScanProfileSafelyUsesBalancedDefault() {
+        assertEquals(ScanProfile.DEFAULT, ScanProfile.fromName(null))
+        assertEquals(ScanProfile.DEFAULT, ScanProfile.fromName(""))
+        assertEquals(ScanProfile.DEFAULT, ScanProfile.fromName("future-profile"))
+    }
+
+    @Test fun scanProfilesKeepTheirDocumentedSpeedAccuracyTradeoff() {
+        assertTrue(ScanProfile.FAST.candidateBudget < ScanProfile.BALANCED.candidateBudget)
+        assertTrue(ScanProfile.BALANCED.candidateBudget < ScanProfile.DEEP.candidateBudget)
+        assertTrue(ScanProfile.FAST.probesPerIp < ScanProfile.BALANCED.probesPerIp)
+        assertTrue(ScanProfile.BALANCED.probesPerIp < ScanProfile.DEEP.probesPerIp)
+        assertTrue(ScanProfile.FAST.timeoutMs < ScanProfile.DEEP.timeoutMs)
+    }
+
     @Test fun reenablingManualCeilingPersistsTheEditedValue() {
         CleanIpScanManager.saveOptions(context, CleanIpScanManager.Options(manual = false))
         val saved = CleanIpScanManager.options(context).copy(manual = true, ceiling = 2300)
