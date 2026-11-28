@@ -27,6 +27,7 @@ import studio.cluvex.aether.MainActivity
 import studio.cluvex.aether.R
 import studio.cluvex.aether.core.AetherController
 import studio.cluvex.aether.core.AetherProcess
+import studio.cluvex.aether.core.EngineReadiness
 import studio.cluvex.aether.core.Diagnostics
 import studio.cluvex.aether.core.DiagnosticsLog
 import studio.cluvex.aether.core.EngineMeta
@@ -1799,7 +1800,33 @@ class AetherVpnService : VpnService() {
             throw IllegalStateException(getString(R.string.err_engine_timeout))
         }
         ChainTrace.stage("engine-socks-open", "after=${waited}ms")
-        DiagnosticsLog.i(TAG, "SOCKS5 port is up.")
+        DiagnosticsLog.i(TAG, "SOCKS5 port is bound; checking that the engine is actually serving SOCKS5.")
+
+        // Aether 1.7 readiness fix: a bound port can accept TCP before the engine
+        // is ready to answer SOCKS5. Tor and custom-upstream paths retain their
+        // bootstrap/carrier-aware readiness gates.
+        val torOwnsReadiness = profile.backend.torMode == TorMode.ONLY ||
+            profile.backend.torMode == TorMode.REVERSE
+        if (!torOwnsReadiness && upstream.isBlank()) {
+            val remaining = (timeoutMs - (SystemClock.elapsedRealtime() - launchedAt)).coerceAtLeast(1_000L)
+            when (EngineReadiness.await(launchedEngine, SOCKS_HOST, SOCKS_PORT, remaining, "engine")) {
+                EngineReadiness.Outcome.READY -> ChainTrace.stage(
+                    "engine-serving",
+                    "after=${SystemClock.elapsedRealtime() - launchedAt}ms",
+                )
+                EngineReadiness.Outcome.DIED -> {
+                    ChainTrace.warn("engine-fail", "category=died-before-serving")
+                    DiagnosticsLog.e(TAG, "Engine exited before serving SOCKS5" +
+                        (launchedEngine.fatalLine?.let { ": $it" } ?: "."))
+                    throw IllegalStateException(getString(R.string.err_engine_died))
+                }
+                EngineReadiness.Outcome.TIMEOUT -> {
+                    ChainTrace.warn("engine-fail", "category=timeout-before-serving budget=${timeoutMs}ms")
+                    DiagnosticsLog.e(TAG, "Engine did not start serving SOCKS5 within this attempt's budget.")
+                    throw IllegalStateException(getString(R.string.err_engine_timeout))
+                }
+            }
+        }
 
         if (stageOnly) {
             if (!profile.verifyConnection && profile.backend.torMode !in listOf(TorMode.ONLY, TorMode.REVERSE)) {

@@ -1,5 +1,7 @@
 package studio.cluvex.aether.core
 
+private const val SERVING_MARKER = "socks5 server listening on"
+
 import android.util.Log
 import studio.cluvex.aether.BuildConfig
 import studio.cluvex.aether.model.ConnectionProfile
@@ -24,6 +26,23 @@ class AetherProcess(
 ) {
     private var process: Process? = null
     private var engineLease: IdentityVault.EngineLease? = null
+
+    /** Engine-reported readiness; a bound TCP port alone is not a serving SOCKS proxy. */
+    @Volatile var servingAtMs: Long = 0L
+        private set
+    @Volatile var fatalLine: String? = null
+        private set
+    @Volatile var startedAtMs: Long = 0L
+        private set
+
+    val isServing: Boolean get() = servingAtMs > 0L
+
+    private fun ingestReadiness(line: String) {
+        if (line.contains(SERVING_MARKER) && servingAtMs == 0L) {
+            servingAtMs = android.os.SystemClock.elapsedRealtime()
+        }
+        if (line.trimStart().startsWith("Error:")) fatalLine = line.trim().take(400)
+    }
 
     /**
      * Acquires identity ownership before unsealing or spawning. The monitor keeps
@@ -178,6 +197,9 @@ class AetherProcess(
 
         val proc = builder.start()
         process = proc
+        startedAtMs = android.os.SystemClock.elapsedRealtime()
+        servingAtMs = 0L
+        fatalLine = null
         // ZERO TRUST (1.3.1, issue #12): hand the engine's stdin to the login-code
         // prompt. Nothing in the app had ever written to it, which is why the
         // e-mail enrolment path could not work - the engine asks for the code on
@@ -212,6 +234,7 @@ class AetherProcess(
             try {
                 proc.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach {
+                        ingestReadiness(it)
                         // SECURITY FIX: the engine's stdout (endpoints, exit
                         // IPs, config echo) must not be mirrored to Logcat in
                         // release builds — Logcat is world-readable via adb and
